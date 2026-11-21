@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/app_icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Slide Up</title>
+    <style>
+      /* Painted by the HTML parser before the JS bundle loads, so the window
+         never shows an empty background during startup. */
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 10001;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: radial-gradient(circle at 50% 42%, #211a4d 0%, #0e1430 45%, #080d1d 100%);
+        color: #eef1ff;
+        font-family: Inter, "Segoe UI", system-ui, sans-serif;
+        user-select: none;
+      }
+      #boot-splash img { width: 88px; height: 88px; object-fit: contain; }
+      #boot-splash h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: 0.01em; }
+      #boot-splash p { margin: 0; font-size: 12px; letter-spacing: 0.14em; color: #aab3d9; }
+      #boot-dots { display: flex; gap: 7px; margin-top: 10px; }
+      #boot-dots span {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #8b5cf6;
+        animation: boot-pulse 1.1s ease-in-out infinite;
+      }
+      #boot-dots span:nth-child(2) { animation-delay: 0.16s; }
+      #boot-dots span:nth-child(3) { animation-delay: 0.32s; }
+      @keyframes boot-pulse {
+        0%, 100% { opacity: 0.25; transform: scale(0.75); }
+        50% { opacity: 1; transform: scale(1); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-dots span { animation: none; opacity: 0.6; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="boot-splash">
+      <img src="/app_icon.png" alt="" />
+      <h1>Slide Up</h1>
+      <p>PLAY · ENJOY · REPEAT</p>
+      <div id="boot-dots"><span></span><span></span><span></span></div>
+    </div>
+    <div id="app"></div>
+    <!-- The native window starts hidden (tauri.conf.json). Reveal it only after
+         the inline splash above has had a frame to paint. -->
+    <script type="module">
+      import { getCurrentWindow } from "@tauri-apps/api/window";
+
+      function reveal() {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const win = getCurrentWindow();
+            void (async () => {
+              // Config already centers at creation; re-center before revealing
+              // so the first visible frame is centered even after a show delay.
+              await win.center().catch(() => undefined);
+              await win.show().catch(() => undefined);
+            })();
+          });
+        });
+      }
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", reveal, { once: true });
+      } else {
+        reveal();
+      }
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

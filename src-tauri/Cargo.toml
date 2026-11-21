@@ -1,0 +1,65 @@
+[package]
+name = "slide-up"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "slide_up_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libloading = "0.9.1"
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+lofty = "0.25.5"
+walkdir = "2.5.0"
+chrono = { version = "0.4.45", features = ["serde"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-store = "2"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
+windows = { version = "0.61.3", features = ["Win32_UI_Shell", "Win32_System_Com"] }
+
+# Caption model download (streaming, cancellable) and async filesystem work.
+reqwest = { version = "0.13", default-features = false, features = ["stream", "default-tls"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "sync", "time"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+
+# ONNX Runtime is loaded at runtime from binaries/onnxruntime.dll (no build-time
+# linking, no libclang). The `directml`/`cuda`/`coreml` flags are inert compilation
+# switches; which providers actually work depends on the bundled ORT library.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["load-dynamic", "half", "directml", "cuda", "coreml"] }
+
+# Caption engine: VAD, feature extraction and CTC decoding.
+anyhow = "1"
+ndarray = "0.17"
+rustfft = "6"
+
+# Optimize debug folder size by reducing debug symbols
+[profile.dev]
+debug = 0 # 0 removes debug symbols entirely (huge space savings). Use 1 if you want basic line numbers for stack traces.
+strip = "debuginfo" # Strip debug info from the final binary (further reduces size)
+
+# Release optimizations — smaller and faster binary
+[profile.release]
+opt-level = 3        # Optimize for binary size (z is even smaller but may hurt performance)
+lto = true           # Link-Time Optimization across all crates
+codegen-units = 1    # Single codegen unit for better optimization
+strip = true         # Strip all debug symbols
+panic = "abort"      # Abort on panic (smaller binary, no unwinding)

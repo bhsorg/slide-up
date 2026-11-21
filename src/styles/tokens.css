@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   SlideUp design tokens — sourced from UI.md
+   Deep midnight navy surfaces, electric purple accent, vibrant blue highlight.
+   --------------------------------------------------------------------------- */
+
+:root {
+  /* surfaces */
+  --bg-base: #070b1a;
+  --bg-secondary: #0d1328;
+  --bg-panel: #111832;
+  --bg-elevated: #162040;
+  --bg-hover: #1b264d;
+  --bg-active: #23305e;
+  --bg-dock: #0b1124;
+
+  /* brand */
+  --accent-purple: #873fff;
+  --accent-purple-soft: #a66cff;
+  --accent-blue: #28b8ff;
+  --accent-gradient: linear-gradient(135deg, #873fff 0%, #28b8ff 100%);
+  --accent-gradient-soft: linear-gradient(135deg, rgba(135, 63, 255, 0.22), rgba(40, 184, 255, 0.14));
+
+  /* text */
+  --text-primary: #f4f6ff;
+  --text-secondary: #909bb8;
+  --text-muted: #647094;
+
+  /* lines & effects (clean, flat, no heavy shadows) */
+  --border-subtle: #1c2648;
+  --border-strong: #2a3765;
+  --shadow-panel: none;
+  --shadow-dock: none;
+  --glow-purple: none;
+
+  /* geometry — compact 8px spacing system, 10–14px radii */
+  --space-1: 6px;
+  --space-2: 12px;
+  --space-3: 18px;
+  --space-4: 24px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 14px;
+  --radius-full: 999px;
+
+  /* motion */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --t-fast: 140ms;
+  --t-base: 220ms;
+  --t-slow: 360ms;
+
+  /* layout (compact) */
+  --sidebar-width: 232px;
+  --sidebar-width-compact: 72px;
+  --playlist-width: 290px;
+  --dock-height: 68px;
+  --topbar-height: 52px;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"],
+html[data-theme="light"],
+[data-theme="light"] {
+  --bg-base: #f0f3fa;
+  --bg-secondary: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-elevated: #f5f7fd;
+  --bg-hover: #e8ecf8;
+  --bg-active: #dce3f5;
+  --bg-dock: #ffffff;
+
+  --text-primary: #12182b;
+  --text-secondary: #4f5a7b;
+  --text-muted: #7985a6;
+
+  --border-subtle: #dbe0ee;
+  --border-strong: #c4cde3;
+  --shadow-panel: none;
+  --shadow-dock: none;
+  --glow-purple: none;
+
+  color-scheme: light;
+}
+
+/* Tailwind utilities bound to semantic tokens (Tailwind CSS v4 @theme inline) */
+@theme inline {
+  --color-base: var(--bg-base);
+  --color-secondary: var(--bg-secondary);
+  --color-panel: var(--bg-panel);
+  --color-elevated: var(--bg-elevated);
+  --color-hover: var(--bg-hover);
+  --color-active: var(--bg-active);
+  --color-dock: var(--bg-dock);
+
+  --color-purple: var(--accent-purple);
+  --color-purple-soft: var(--accent-purple-soft);
+  --color-blue: var(--accent-blue);
+
+  --color-ink: var(--text-primary);
+  --color-muted: var(--text-secondary);
+  --color-faint: var(--text-muted);
+
+  --color-line: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
+}

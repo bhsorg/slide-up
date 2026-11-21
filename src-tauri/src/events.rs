@@ -1,0 +1,15 @@
+pub const PLAYER_STATE: &str = "player://state";
+pub const PLAYER_PROGRESS: &str = "player://progress";
+pub const PLAYER_TRACKS: &str = "player://tracks";
+pub const QUEUE_CHANGED: &str = "queue://changed";
+pub const PLAYER_FILE_LOADED: &str = "player://file-loaded";
+pub const PLAYER_ENDED: &str = "player://ended";
+pub const PLAYER_ERROR: &str = "player://error";
+pub const LIBRARY_CHANGED: &str = "library://changed";
+pub const LIBRARY_SCAN_PROGRESS: &str = "library://scan-progress";
+pub const STORYBOARD_PROGRESS: &str = "storyboard://progress";
+pub const PLAYLISTS_CHANGED: &str = "playlists://changed";
+pub const SETTINGS_CHANGED: &str = "settings://changed";
+pub const TOAST: &str = "app://toast";
+pub const MODEL_DOWNLOAD_PROGRESS: &str = "model-download-progress";
+pub const UPSCALER_DOWNLOAD_PROGRESS: &str = "upscaler-download-progress";
