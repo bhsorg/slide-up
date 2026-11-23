@@ -94,12 +94,13 @@ async function playStream(queueOnly = false) {
     // keep raw if URI is not percent-encoded
   }
   const name = streamTitle.value.trim() || decodedFilename;
+  const isAudioUrl = /\.(mp3|aac|m4a|flac|ogg|opus|wav|wma)(\?.*)?$/i.test(url) || /radio|podcast|audio/i.test(url);
   const streamItem: MediaItem = {
     id: -Math.floor(Date.now() % 1000000000),
     path: url,
-    kind: "video",
+    kind: isAudioUrl ? "audio" : "video",
     title: name,
-    artist: "Network Stream",
+    artist: isAudioUrl ? "Audio Stream" : "Network Stream",
     album: "Stream",
     durationMs: 0,
     codec: null,

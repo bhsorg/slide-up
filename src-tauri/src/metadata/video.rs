@@ -128,8 +128,12 @@ pub fn probe(
     std::fs::create_dir_all(&temp_dir)?;
 
     // Frames are staged under a temporary id and renamed by the library scan
-    // once the real database id is known.
-    let story_dir = data_dir.join("thumbnails").join("0_storyboard");
+    // once the real database id is known. If media_id is provided (> 0), write directly.
+    let story_dir = if media_id > 0 {
+        data_dir.join("storyboards").join(media_id.to_string())
+    } else {
+        data_dir.join("thumbnails").join("0_storyboard")
+    };
     if generate_storyboard {
         let _ = std::fs::remove_dir_all(&story_dir);
         let _ = std::fs::create_dir_all(&story_dir);

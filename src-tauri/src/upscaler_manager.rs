@@ -19,21 +19,25 @@ use tokio_util::sync::CancellationToken;
 
 const REAL_ESRGAN_URL: &str = "https://huggingface.co/CoderViking/realesr-general-x4v3-onnx/resolve/main/realesr-general-x4v3.onnx";
 const FSRCNNX_URL: &str = "https://github.com/igv/FSRCNN-TensorFlow/releases/download/1.1/FSRCNNX_x2_8-0-4-1.glsl";
-const BYTES_PER_MB: f64 = 1024.0 * 1024.0;
-const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
+const SPAN_X2_URL: &str = "https://huggingface.co/huggingworld/onnx-image-models/resolve/main/2x-spanx2-ch48.onnx";
+const SPAN_X4_URL: &str = "https://huggingface.co/huggingworld/onnx-image-models/resolve/main/4xPurePhoto-Span.onnx";
+const ESPCN_X2_URL: &str = "https://github.com/onnx/models/raw/main/validated/vision/super_resolution/sub_pixel_cnn_2016/model/super-resolution-10.onnx";
+const ESPCN_X4_URL: &str = "https://huggingface.co/huggingworld/onnx-image-models/resolve/main/4x-ClearRealityV1.onnx";
 
-/// Catalog of upscaler models. `url` is `None` until a source is verified; such
-/// entries are shown in settings as unavailable instead of shipping a dead link.
-struct Definition {
-    id: &'static str,
-    name: &'static str,
-    file_name: &'static str,
-    size_bytes: u64,
-    speed: &'static str,
-    description: &'static str,
-    url: Option<&'static str>,
+const BYTES_PER_MB: f64 = 1024.0 * 1024.0;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Catalog of upscaler models.
+pub struct Definition {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub file_name: &'static str,
+    pub size_bytes: u64,
+    pub speed: &'static str,
+    pub description: &'static str,
+    pub url: Option<&'static str>,
     /// `"model"` for ONNX files, `"shader"` for mpv GLSL shaders.
-    kind: &'static str,
+    pub kind: &'static str,
 }
 
 const DEFINITIONS: &[Definition] = &[
@@ -41,20 +45,20 @@ const DEFINITIONS: &[Definition] = &[
         id: "span-x2",
         name: "SPAN x2",
         file_name: "spanx2_ch48.onnx",
-        size_bytes: 1_572_864,
+        size_bytes: 1_659_067,
         speed: "3–8 ms GPU / 25 ms CPU",
         description: "Fast real-time upscaler (NTIRE winner, no heavy attention layers).",
-        url: None,
+        url: Some(SPAN_X2_URL),
         kind: "model",
     },
     Definition {
         id: "span-x4",
         name: "SPAN x4",
         file_name: "spanx4.onnx",
-        size_bytes: 1_572_864,
+        size_bytes: 1_721_421,
         speed: "3–8 ms GPU / 25 ms CPU",
         description: "Fast real-time 4x upscaler (NTIRE winner).",
-        url: None,
+        url: Some(SPAN_X4_URL),
         kind: "model",
     },
     Definition {
@@ -71,20 +75,20 @@ const DEFINITIONS: &[Definition] = &[
         id: "espcn-x2",
         name: "ESPCN x2",
         file_name: "ESPCN_x2.onnx",
-        size_bytes: 104_858,
+        size_bytes: 240_078,
         speed: "< 2 ms on CPU",
         description: "Instant edge sharpening and 2x upscaling with minimal resources.",
-        url: None,
+        url: Some(ESPCN_X2_URL),
         kind: "model",
     },
     Definition {
         id: "espcn-x4",
-        name: "ESPCN x4",
+        name: "ClearReality 4x",
         file_name: "ESPCN_x4.onnx",
-        size_bytes: 104_858,
-        speed: "< 2 ms on CPU",
+        size_bytes: 1_721_421,
+        speed: "< 5 ms GPU / 30 ms CPU",
         description: "Instant edge sharpening and 4x upscaling with minimal resources.",
-        url: None,
+        url: Some(ESPCN_X4_URL),
         kind: "model",
     },
     Definition {
@@ -99,7 +103,7 @@ const DEFINITIONS: &[Definition] = &[
     },
 ];
 
-fn definition(id: &str) -> Result<&'static Definition> {
+pub fn definition(id: &str) -> Result<&'static Definition> {
     DEFINITIONS
         .iter()
         .find(|model| model.id == id)
@@ -251,12 +255,14 @@ impl UpscalerManager {
             *guard = Some(token.clone());
         }
 
-        let total = model.size_bytes;
-        let result = self.download_file(model, url, &token, total).await;
+        // Notify connecting state right away so UI displays progress block with 0%
+        self.emit_progress(0, model.size_bytes, "connecting");
+
+        let result = self.download_file(model, url, &token, model.size_bytes).await;
         let was_cancelled = token.is_cancelled();
 
-        if result.is_ok() {
-            self.emit_progress(total, total, "completed");
+        if let Ok(actual_total) = result {
+            self.emit_progress(actual_total, actual_total, "completed");
         } else {
             let _ = tokio::fs::remove_file(self.tmp_path(model)).await;
             self.emit_progress(0, 0, if was_cancelled { "cancelled" } else { "error" });
@@ -274,7 +280,7 @@ impl UpscalerManager {
             })?;
             *guard = None;
         }
-        result
+        result.map(|_| ())
     }
 
     async fn download_file(
@@ -282,8 +288,8 @@ impl UpscalerManager {
         model: &Definition,
         url: &str,
         token: &CancellationToken,
-        total: u64,
-    ) -> Result<()> {
+        fallback_total: u64,
+    ) -> Result<u64> {
         let tmp = self.tmp_path(model);
         let resume_from = tokio::fs::metadata(&tmp)
             .await
@@ -313,6 +319,13 @@ impl UpscalerManager {
             ));
         }
         let append = response.status() == reqwest::StatusCode::PARTIAL_CONTENT && resume_from > 0;
+        let content_len = response.content_length().unwrap_or(0);
+        let total = if content_len > 0 {
+            content_len + if append { resume_from } else { 0 }
+        } else {
+            fallback_total
+        };
+
         let mut file = if append {
             tokio::fs::OpenOptions::new().append(true).open(&tmp).await?
         } else {
@@ -321,6 +334,9 @@ impl UpscalerManager {
         let mut downloaded = if append { resume_from } else { 0 };
         let mut last_emit = Instant::now() - PROGRESS_INTERVAL;
         let mut stream = response.bytes_stream();
+
+        // Emit initial progress with actual total
+        self.emit_progress(downloaded, total, "downloading");
 
         loop {
             tokio::select! {
@@ -347,8 +363,13 @@ impl UpscalerManager {
         file.flush().await?;
         file.sync_all().await?;
         drop(file);
-        tokio::fs::rename(&tmp, self.final_path(model)).await?;
-        Ok(())
+
+        let final_path = self.final_path(model);
+        if final_path.exists() {
+            let _ = tokio::fs::remove_file(&final_path).await;
+        }
+        tokio::fs::rename(&tmp, final_path).await?;
+        Ok(downloaded)
     }
 
     fn cancel(&self) {

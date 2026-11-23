@@ -23,7 +23,7 @@ const MODEL_FILE: &str = "model.int8.onnx";
 const TOKENS_FILE: &str = "tokens.txt";
 const VAD_FILE: &str = "silero_vad.onnx";
 const VAD_URL: &str = "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx";
-const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
 const BYTES_PER_MB: f64 = 1024.0 * 1024.0;
 
 /// Fallback sizes (bytes) when a HEAD request cannot report Content-Length.
@@ -244,6 +244,9 @@ impl ModelManager {
         file_handle.sync_all().await?;
         drop(file_handle);
         // Atomic publish: a partial file is never visible under its final name.
+        if final_path.exists() {
+            let _ = tokio::fs::remove_file(&final_path).await;
+        }
         tokio::fs::rename(&tmp_path, &final_path).await?;
         let _ = file_total;
         Ok(written)

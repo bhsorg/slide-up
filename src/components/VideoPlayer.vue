@@ -14,6 +14,7 @@ import { useSettingsStore } from "../stores/settings";
 import { useToast } from "../composables/useToast";
 import type { MediaItem } from "../types/media";
 import type { MediaTrack } from "../types/player";
+import AppLogo from "./AppLogo.vue";
 
 const props = withDefaults(defineProps<{ queueOpen?: boolean }>(), {
   queueOpen: false,
@@ -40,7 +41,7 @@ let syncAttempts = 0;
 type ActiveMenu = "speed" | "settings" | null;
 const activeMenu = ref<ActiveMenu>(null);
 
-type SettingsSection = "root" | "speed" | "quality" | "aspect" | "subtitles" | "audio" | "filters" | "tools";
+type SettingsSection = "root" | "speed" | "quality" | "aspect" | "subtitles" | "audio" | "filters" | "tools" | "ai";
 const settingsSection = ref<SettingsSection>("root");
 
 // Right-click context menu state
@@ -377,11 +378,13 @@ const settingsTitle = computed(() => {
     case "audio": return "Audio Tracks";
     case "filters": return "Filters";
     case "tools": return "Tools";
+    case "ai": return "AI Features";
     default: return "Settings";
   }
 });
 
 const settingsRows = computed(() => [
+  { key: "ai" as const, label: "AI Features", value: player.aiEnhance ? (player.activeAiModelName || "Active") : (player.aiEnhanceAvailable ? "Off" : "Not setup") },
   { key: "quality" as const, label: "Quality", value: currentQualityLabel.value },
   { key: "speed" as const, label: "Speed", value: currentSpeedLabel.value },
   { key: "aspect" as const, label: "Aspect ratio", value: currentAspectLabel.value },
@@ -816,14 +819,15 @@ data-tauri-drag-region
           @mouseleave="isInteractingWithControls = false; wake()">
           <!-- Left: Thumbnail & Title -->
           <div class="flex items-center gap-2.5 min-w-0">
-            <!-- Channel Logo (IPTV) or Video File Thumbnail with TV/Film fallback -->
+            <!-- Channel Logo (IPTV) or Video File Thumbnail with TV/AppLogo fallback -->
             <div
               class="relative h-7 w-7 shrink-0 overflow-hidden rounded-md bg-black/50 border border-white/20 shadow-sm flex items-center justify-center">
               <img v-if="videoThumbnailUrl" :src="videoThumbnailUrl" :alt="current?.title ?? 'Thumbnail'"
                 class="h-full w-full object-cover z-1"
                 @error="($event.target as HTMLImageElement).style.display = 'none'" />
-              <Tv v-if="player.isLive || (current?.id && current.id < -1000)" :size="15"
+              <Tv v-if="player.isLive || (current?.id && current.id < -1000 && current?.kind !== 'audio')" :size="15"
                 class="text-purple-400 opacity-90" />
+              <AppLogo v-else-if="current?.kind === 'audio' || (current?.path && /\.(mp3|aac|m4a|flac|ogg|opus|wav|wma)(\?.*)?$/i.test(current.path))" class="h-4.5 w-4.5 opacity-85" />
               <Film v-else :size="13" class="text-white/60" />
             </div>
 
@@ -861,13 +865,13 @@ data-tauri-drag-region
               <Captions :size="15" />
             </button>
 
-            <!-- AI Enhance (FSRCNNX GLSL shader) — only when installed -->
+            <!-- AI Enhance — available whenever any upscaler model/shader is installed -->
             <button
               v-if="player.aiEnhanceAvailable"
               type="button"
               class="ref-icon-btn"
               :class="{ 'ref-icon-btn-active': player.aiEnhance }"
-              :title="player.aiEnhance ? 'Disable AI Enhance' : 'Enable AI Enhance (FSRCNNX)'"
+              :title="player.aiEnhance ? `Disable AI Enhance (${player.activeAiModelName})` : `Enable AI Enhance (${player.activeAiModelName})`"
               @click.stop="toggleAiEnhance"
             >
               <Sparkles :size="15" />
@@ -1405,6 +1409,73 @@ class="su-range volume-vertical-range" type="range" min="0" max="1" step="0.01"
             <Camera :size="12" /> Screenshot
           </button>
         </div>
+
+        <!-- AI Features Submenu -->
+        <div v-else-if="settingsSection === 'ai'" class="flex flex-col gap-2 p-2.5 max-h-80 overflow-y-auto">
+          <!-- Main AI Enhance Master Toggle -->
+          <div class="flex items-center justify-between rounded-lg bg-white/5 p-2">
+            <div class="flex flex-col">
+              <div class="flex items-center gap-1.5 font-semibold text-[11px] text-white">
+                <Sparkles :size="13" class="text-[#8b5cf6]" />
+                <span>AI Video Enhance</span>
+              </div>
+              <span class="text-[9px] text-white/50">Real-time upscaling & debanding</span>
+            </div>
+            <button
+              type="button"
+              class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              :class="player.aiEnhance ? 'bg-[#8b5cf6]' : 'bg-white/20'"
+              @click="toggleAiEnhance"
+            >
+              <span
+                class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out"
+                :class="player.aiEnhance ? 'translate-x-4' : 'translate-x-0'"
+              />
+            </button>
+          </div>
+
+          <!-- Model Selection -->
+          <div class="flex flex-col gap-1">
+            <span class="text-[9.5px] font-bold text-white/40 uppercase tracking-wider px-1">AI Upscaler Model</span>
+            <div class="flex flex-col gap-1">
+              <button
+                v-for="model in player.upscalerModels"
+                :key="model.id"
+                type="button"
+                class="yt-list-item flex items-center justify-between !py-1.5 cursor-pointer"
+                :class="{
+                  active: player.activeAiModel === model.id && player.aiEnhance,
+                  'opacity-40 cursor-not-allowed': !model.isDownloaded
+                }"
+                :disabled="!model.isDownloaded"
+                @click="player.setActiveAiModel(model.id)"
+              >
+                <div class="flex flex-col text-left truncate mr-2">
+                  <span class="text-[11px] text-white truncate">{{ model.name }}</span>
+                  <span class="text-[8.5px] text-white/50">{{ model.speed }}</span>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span v-if="!model.isDownloaded" class="text-[8px] text-white/35 bg-white/5 px-1.5 py-0.5 rounded">Not installed</span>
+                  <span v-else-if="player.activeAiModel === model.id" class="text-[8.5px] text-[#a78bfa] font-semibold">Active</span>
+                  <Check v-if="player.activeAiModel === model.id && player.aiEnhance" :size="12" class="text-[#8b5cf6]" />
+                </div>
+              </button>
+            </div>
+          </div>
+
+          <!-- Offline 4x Upscale Action -->
+          <div v-if="player.realesrganAvailable" class="border-t border-white/10 pt-2">
+            <button
+              type="button"
+              class="flex w-full items-center justify-center gap-1.5 rounded-md bg-[#8b5cf6]/20 px-2 py-1.5 text-[10.5px] font-semibold text-[#c4b5fd] hover:bg-[#8b5cf6]/30 cursor-pointer disabled:opacity-50"
+              :disabled="upscaling"
+              @click="upscaleCurrentVideo"
+            >
+              <WandSparkles :size="12" />
+              <span>{{ upscaling ? 'Upscaling…' : 'Upscale Full Video (4x)' }}</span>
+            </button>
+          </div>
+        </div>
       </div>
     </Transition>
 
@@ -1547,7 +1618,7 @@ class="su-range volume-vertical-range" type="range" min="0" max="1" step="0.01"
           </div>
         </button>
 
-        <!-- AI Enhance shader toggle -->
+        <!-- AI Enhance toggle & submenu shortcut -->
         <button
           v-if="player.aiEnhanceAvailable"
           type="button"
@@ -1556,9 +1627,22 @@ class="su-range volume-vertical-range" type="range" min="0" max="1" step="0.01"
         >
           <div class="flex items-center gap-2.5">
             <Sparkles :size="14" :class="{ 'text-[#a78bfa]': player.aiEnhance }" />
-            <span>{{ player.aiEnhance ? 'Disable AI Enhance' : 'Enable AI Enhance' }}</span>
+            <span>{{ player.aiEnhance ? `AI Enhance: ${player.activeAiModelName} (ON)` : 'Enable AI Enhance' }}</span>
           </div>
           <Check v-if="player.aiEnhance" :size="14" class="text-[#a78bfa]" />
+        </button>
+
+        <!-- Open AI Features submenu from context menu -->
+        <button
+          type="button"
+          class="ctx-item"
+          @click="toggleMenu('settings'); settingsSection = 'ai'; closeContextMenu()"
+        >
+          <div class="flex items-center gap-2.5">
+            <Sparkles :size="14" class="text-white/60" />
+            <span>AI Features Settings…</span>
+          </div>
+          <ChevronRight :size="12" class="text-white/40" />
         </button>
 
         <!-- Real-ESRGAN offline upscale -->

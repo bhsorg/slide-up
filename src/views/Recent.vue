@@ -22,9 +22,15 @@ function play(list: MediaItem[], index: number) {
   void player.playList(list, index, "Recently played").catch((error: unknown) => toast.error(String(error), "Playback failed"));
 }
 
+import { confirmAction } from "../utils/dialog";
+
 async function clearAllRecent() {
   if (!items.value.length) return;
-  if (!window.confirm("Clear all playback history? Media files will not be deleted.")) return;
+  const confirmed = await confirmAction(
+    "Are you sure you want to clear your entire playback history?\n\nMedia files will not be deleted.",
+    { title: "Clear Playback History", kind: "warning", okLabel: "Clear History" }
+  );
+  if (!confirmed) return;
   try {
     await library.clearRecent();
     toast.success("Cleared playback history.");

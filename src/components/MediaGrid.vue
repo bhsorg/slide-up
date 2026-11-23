@@ -11,6 +11,7 @@ import { useMediaProperties } from "../composables/useMediaProperties";
 import { useArtistBio } from "../composables/useArtistBio";
 import { useStoryboardTask } from "../composables/useStoryboardTask";
 import { useSubtitleAvailability } from "../composables/useSubtitleAvailability";
+import { confirmAction } from "../utils/dialog";
 import ContextMenu from "./ContextMenu.vue";
 import AppLogo from "./AppLogo.vue";
 import type { ContextMenuItem } from "../types/contextMenu";
@@ -127,6 +128,11 @@ async function removeSelected() {
   const ids = items.map((item) => item.id);
 
   if (props.removeType === "recent") {
+    const confirmed = await confirmAction(
+      `Remove ${items.length} item${items.length === 1 ? "" : "s"} from recent playback history?`,
+      { title: "Remove from History", kind: "info" }
+    );
+    if (!confirmed) return;
     try {
       await library.removeFromRecent(ids);
       toast.success(`Removed ${items.length} item${items.length === 1 ? "" : "s"} from recent history.`);
@@ -135,6 +141,11 @@ async function removeSelected() {
       toast.error(String(error), "Could not remove items from recent history");
     }
   } else if (props.removeType === "favorites") {
+    const confirmed = await confirmAction(
+      `Remove ${items.length} item${items.length === 1 ? "" : "s"} from favorites?`,
+      { title: "Remove from Favorites", kind: "info" }
+    );
+    if (!confirmed) return;
     try {
       await library.removeFavorites(ids);
       toast.success(`Removed ${items.length} item${items.length === 1 ? "" : "s"} from favorites.`);
@@ -143,7 +154,11 @@ async function removeSelected() {
       toast.error(String(error), "Could not remove items from favorites");
     }
   } else if (props.removeType === "library") {
-    if (!window.confirm(`Remove ${items.length} item${items.length === 1 ? "" : "s"} from the library? Files on disk will not be deleted.`)) return;
+    const confirmed = await confirmAction(
+      `Remove ${items.length} item${items.length === 1 ? "" : "s"} from the library?\n\nFiles on disk will not be deleted.`,
+      { title: "Remove from Library", kind: "warning", okLabel: "Remove" }
+    );
+    if (!confirmed) return;
     try {
       await library.removeMany(ids);
       toast.success(`Removed ${items.length} item${items.length === 1 ? "" : "s"} from the library.`);
@@ -279,11 +294,18 @@ async function onMenuSelect(index: number) {
       }
       break;
     case "remove":
-      try {
-        await library.remove(item);
-        toast.info(`Removed “${item.title}” from the library.`);
-      } catch (error) {
-        toast.error(String(error), "Could not remove item");
+      {
+        const confirmed = await confirmAction(
+          `Remove “${item.title}” from the library?\n\nFiles on disk will not be deleted.`,
+          { title: "Remove from Library", kind: "warning", okLabel: "Remove" }
+        );
+        if (!confirmed) return;
+        try {
+          await library.remove(item);
+          toast.info(`Removed “${item.title}” from the library.`);
+        } catch (error) {
+          toast.error(String(error), "Could not remove item");
+        }
       }
       break;
   }

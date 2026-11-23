@@ -30,22 +30,27 @@ async function loadModels() {
 function handleProgress(payload: DownloadProgress) {
   progress.value = payload;
   if (payload.status === "completed") {
-    activeId.value = null;
-    void loadModels();
-    toast.success("Upscaler model downloaded.");
+    setTimeout(() => {
+      activeId.value = null;
+      progress.value = null;
+      void loadModels();
+      toast.success("Upscaler model downloaded.");
+    }, 700);
   } else if (payload.status === "cancelled") {
     activeId.value = null;
+    progress.value = null;
     void loadModels();
     toast.info("Upscaler download cancelled.");
   } else if (payload.status === "error") {
     activeId.value = null;
+    progress.value = null;
     void loadModels();
   }
 }
 
 async function download(model: UpscalerModelStatus) {
   activeId.value = model.id;
-  progress.value = { percentage: 0, downloadedMb: 0, totalMb: model.sizeMb, status: "downloading" };
+  progress.value = { percentage: 0, downloadedMb: 0, totalMb: model.sizeMb, status: "connecting" };
   try {
     await api.downloadUpscalerModel(model.id);
   } catch (error) {
@@ -123,7 +128,7 @@ onUnmounted(() => {
 
             <div v-if="activeId === model.id" class="progress-block">
               <div class="progress-head">
-                <span class="progress-label">Downloading…</span>
+                <span class="progress-label">{{ progress?.status === 'completed' ? 'Completed!' : progress?.status === 'connecting' ? 'Connecting…' : 'Downloading…' }}</span>
                 <span class="progress-percent">{{ (progress?.percentage ?? 0).toFixed(1) }}%</span>
               </div>
               <div class="progress-track">
@@ -131,7 +136,7 @@ onUnmounted(() => {
               </div>
               <div class="progress-meta">
                 <span>{{ (progress?.downloadedMb ?? 0).toFixed(2) }} MB / {{ (progress?.totalMb ?? model.sizeMb).toFixed(2) }} MB</span>
-                <span>{{ progress?.status || "downloading" }}</span>
+                <span style="text-transform: capitalize;">{{ progress?.status || "downloading" }}</span>
               </div>
             </div>
           </div>

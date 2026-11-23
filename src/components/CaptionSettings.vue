@@ -45,26 +45,32 @@ async function loadStatus() {
 function handleProgress(payload: DownloadProgress) {
   progress.value = payload;
   if (payload.status === "completed") {
-    started.value = false;
-    void loadStatus();
-    toast.success("Caption model is ready.");
+    setTimeout(() => {
+      started.value = false;
+      progress.value = null;
+      void loadStatus();
+      toast.success("Caption model is ready.");
+    }, 700);
   } else if (payload.status === "cancelled") {
     started.value = false;
+    progress.value = null;
     void loadStatus();
     toast.info("Model download cancelled.");
   } else if (payload.status === "error") {
     started.value = false;
+    progress.value = null;
     void loadStatus();
   }
 }
 
 async function download() {
   started.value = true;
-  progress.value = { percentage: 0, downloadedMb: 0, totalMb: 0, status: "downloading" };
+  progress.value = { percentage: 0, downloadedMb: 0, totalMb: 241.8, status: "connecting" };
   try {
     await api.downloadCaptionModel();
   } catch (error) {
     started.value = false;
+    progress.value = null;
     toast.error(String(error), "Model download");
     void loadStatus();
   }
@@ -183,15 +189,15 @@ onUnmounted(() => {
       <!-- State 2: downloading -->
       <div v-else-if="downloading" class="model-state">
         <div class="progress-head">
-          <span class="progress-label">Downloading model…</span>
+          <span class="progress-label">{{ progress?.status === 'completed' ? 'Completed!' : progress?.status === 'connecting' ? 'Connecting…' : 'Downloading model…' }}</span>
           <span class="progress-percent">{{ (progress?.percentage ?? 0).toFixed(1) }}%</span>
         </div>
         <div class="progress-track">
           <div class="progress-fill" :style="{ width: `${progress?.percentage ?? 0}%` }"></div>
         </div>
         <div class="progress-meta">
-          <span>{{ (progress?.downloadedMb ?? 0).toFixed(1) }} MB / {{ (progress?.totalMb ?? 0).toFixed(1) }} MB</span>
-          <span>{{ progress?.status || "downloading" }}</span>
+          <span>{{ (progress?.downloadedMb ?? 0).toFixed(1) }} MB / {{ (progress?.totalMb ?? 241.8).toFixed(1) }} MB</span>
+          <span style="text-transform: capitalize;">{{ progress?.status || "downloading" }}</span>
         </div>
         <div class="model-actions">
           <button type="button" class="btn-outline" @click="cancel">Cancel</button>

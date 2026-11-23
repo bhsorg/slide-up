@@ -153,14 +153,19 @@ slide-up/
 
 ---
 
-## 🔒 Security & Privacy
+## 🔒 Security, Privacy & License
 
 - **Fully Offline Core**: All local media library scanning, audio tagging, and AI processing run 100% locally on your machine.
 - **Zero Telemetry**: No user tracking or behavioral telemetry.
 - **Secure Sandbox**: External web links and network streams strictly use secure HTTPS endpoints with verified fallbacks.
+- **Desktop Repository**: [https://github.com/bhsorg/slide-up](https://github.com/bhsorg/slide-up)
+- **Official Website / Blog**: [https://bloghindisupport.com](https://bloghindisupport.com)
+- **Android Version Repo**: [https://github.com/hinditutorpoint/slideup](https://github.com/hinditutorpoint/slideup)
+- **Android Version Website**: [https://hinditutorpoint.github.io/slideup/](https://hinditutorpoint.github.io/slideup/)
+- **License**: Slide Up is licensed under the **GNU General Public License v3.0 (GPLv3)**. Any modified distribution or fork must remain open source under the same license terms.
 
 ---
 
 <div align="center">
-  <sub>Maintained by <strong>bhsorg</strong> • Crafted with precision using Tauri 2 and Rust</sub>
+  <sub>Maintained by <strong><a href="https://bloghindisupport.com" target="_blank">bhsorg</a></strong> • <a href="https://github.com/bhsorg/slide-up" target="_blank">Desktop (GitHub)</a> • <a href="https://hinditutorpoint.github.io/slideup/" target="_blank">Android Edition</a></sub>
 </div>

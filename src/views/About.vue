@@ -1,8 +1,27 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { Info, FileText, CheckCircle2, Cpu, ShieldCheck, Scale } from "@lucide/vue";
+import { onMounted, ref } from "vue";
+import { Info, FileText, CheckCircle2, Cpu, ShieldCheck, Scale, Globe, ExternalLink, Smartphone } from "@lucide/vue";
+import { api } from "../services/tauri";
 
 const activeSubTab = ref<"about" | "license" | "terms" | "privacy">("about");
+const appVersion = ref("1.0.0");
+
+onMounted(async () => {
+  try {
+    const ver = await api.getAppVersion();
+    if (ver) {
+      appVersion.value = ver;
+    }
+  } catch (err) {
+    console.warn("Failed to load real app version:", err);
+  }
+});
+
+function openLink(url: string) {
+  void api.openExternal(url).catch(() => {
+    window.open(url, "_blank");
+  });
+}
 
 const techStack = [
   { name: "Tauri 2", role: "Desktop Application Framework", license: "MIT / Apache-2.0" },
@@ -84,7 +103,7 @@ const features = [
       <!-- Tab 1: About -->
       <div v-if="activeSubTab === 'about'" class="about-cards-grid">
         <!-- App Overview Card -->
-        <div class="su-card hero-card">
+        <div class="su-card hero-card full-width">
           <div class="hero-header">
             <div class="app-avatar">
               <Cpu :size="26" />
@@ -92,7 +111,7 @@ const features = [
             <div>
               <h2 class="app-title">Slide Up Desktop</h2>
               <div class="app-meta">
-                <span class="version-tag">v1.0.0</span>
+                <span class="version-tag">v{{ appVersion }}</span>
                 <span class="meta-dot">•</span>
                 <span class="meta-text">64-bit Windows</span>
                 <span class="meta-dot">•</span>
@@ -104,10 +123,52 @@ const features = [
             A high-performance modern desktop media player engineered for seamless audio and video playback,
             powered by native Rust, libmpv, and AI-accelerated shaders.
           </p>
+
+          <!-- External Links Row -->
+          <div class="flex flex-wrap items-center gap-2.5 pt-2">
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line bg-secondary text-xs font-medium text-ink transition-colors hover:border-purple/50 hover:bg-hover hover:text-purple-400 cursor-pointer"
+              @click="openLink('https://github.com/bhsorg/slide-up')"
+            >
+              <svg class="h-3.5 w-3.5 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+              </svg>
+              <span>Desktop GitHub</span>
+              <ExternalLink :size="11" class="text-faint ml-0.5" />
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line bg-secondary text-xs font-medium text-ink transition-colors hover:border-purple/50 hover:bg-hover hover:text-purple-400 cursor-pointer"
+              @click="openLink('https://bloghindisupport.com')"
+            >
+              <Globe :size="14" class="text-blue-400" />
+              <span>Website (bloghindisupport.com)</span>
+              <ExternalLink :size="11" class="text-faint ml-0.5" />
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line bg-secondary text-xs font-medium text-ink transition-colors hover:border-emerald-500/50 hover:bg-hover hover:text-emerald-400 cursor-pointer"
+              @click="openLink('https://github.com/hinditutorpoint/slideup')"
+            >
+              <Smartphone :size="14" class="text-emerald-400" />
+              <span>Android Repo (GitHub)</span>
+              <ExternalLink :size="11" class="text-faint ml-0.5" />
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line bg-secondary text-xs font-medium text-ink transition-colors hover:border-emerald-500/50 hover:bg-hover hover:text-emerald-400 cursor-pointer"
+              @click="openLink('https://hinditutorpoint.github.io/slideup/')"
+            >
+              <Globe :size="14" class="text-emerald-400" />
+              <span>Android Site (hinditutorpoint)</span>
+              <ExternalLink :size="11" class="text-faint ml-0.5" />
+            </button>
+          </div>
         </div>
 
         <!-- Highlights & Features Card -->
-        <div class="su-card">
+        <div class="su-card full-width">
           <h3 class="card-title">Key Capabilities</h3>
           <ul class="features-list">
             <li v-for="(feat, idx) in features" :key="idx" class="feature-item">
@@ -140,25 +201,26 @@ const features = [
         <div class="su-card">
           <div class="flex items-center gap-2 mb-3">
             <ShieldCheck :size="18" class="text-purple-400" />
-            <h3 class="card-title mb-0">Open Source Licensing (MIT)</h3>
+            <h3 class="card-title mb-0">Open Source Copyleft License (GNU GPLv3)</h3>
           </div>
 
           <div class="license-box">
-            <p class="font-bold text-ink text-sm">MIT License</p>
+            <p class="font-bold text-ink text-sm">GNU General Public License v3.0 (GPLv3)</p>
             <p class="mt-1 text-faint text-xs font-mono">Copyright (c) 2026 Slide Up Contributors</p>
             <p class="mt-3 text-ink text-xs leading-relaxed">
-              Permission is hereby granted, free of charge, to any person obtaining a copy
-              of this software and associated documentation files (the "Software"), to deal
-              in the Software without restriction, including without limitation the rights
-              to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-              copies of the Software, and to permit persons to whom the Software is
-              furnished to do so, subject to the following conditions:
+              Slide Up is free and open-source software licensed under the <strong>GNU General Public License v3.0</strong>.
+              This strong copyleft license guarantees user freedoms while legally protecting the project from being repackaged,
+              re-branded, or turned into closed-source proprietary commercial software.
             </p>
-            <p class="mt-2 text-ink text-xs leading-relaxed">
-              The above copyright notice and this permission notice shall be included in all
-              copies or substantial portions of the Software.
-            </p>
-            <p class="mt-2 text-muted text-xs leading-relaxed uppercase">
+            <div class="mt-3 p-3 rounded-lg border border-purple/30 bg-purple/10 text-xs text-ink space-y-1.5">
+              <p class="font-semibold text-purple-400">Key Protections & Terms under GPLv3:</p>
+              <ul class="list-disc pl-4 space-y-1 text-muted text-[11px]">
+                <li><strong>Source Code Preservation:</strong> Anyone who distributes, forks, or modifies Slide Up MUST release the complete source code under the same GPLv3 license.</li>
+                <li><strong>No Proprietary Re-branding:</strong> Nobody can legally change the branding, take the code private, or sell closed-source binary forks without releasing full modified source code.</li>
+                <li><strong>Patent & Attribution Protection:</strong> Explicit patent grant and strict requirement to preserve original author copyright and license notices.</li>
+              </ul>
+            </div>
+            <p class="mt-3 text-muted text-xs leading-relaxed uppercase">
               THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
               IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
               FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE

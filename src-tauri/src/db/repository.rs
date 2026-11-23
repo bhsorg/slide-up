@@ -408,6 +408,69 @@ impl Repository {
         Ok(())
     }
 
+    // --- Lyrics ------------------------------------------------------------
+
+    pub fn get_lyrics(conn: &Connection, media_id: i64) -> Result<Option<String>> {
+        Ok(conn
+            .query_row(
+                "SELECT json_data FROM lyrics WHERE media_id = ?1",
+                params![media_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn save_lyrics(
+        conn: &Connection,
+        media_id: i64,
+        track_name: &str,
+        artist_name: &str,
+        synced: bool,
+        plain_text: &str,
+        json_data: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT INTO lyrics (media_id, track_name, artist_name, synced, plain_text, json_data, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(media_id) DO UPDATE SET \
+                track_name = excluded.track_name, \
+                artist_name = excluded.artist_name, \
+                synced = excluded.synced, \
+                plain_text = excluded.plain_text, \
+                json_data = excluded.json_data, \
+                updated_at = excluded.updated_at",
+            params![
+                media_id,
+                track_name,
+                artist_name,
+                if synced { 1 } else { 0 },
+                plain_text,
+                json_data,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn search_media_by_lyrics(conn: &Connection, query: &str) -> Result<Vec<i64>> {
+        let term = query.trim();
+        if term.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pattern = format!("%{}%", escape_like(term));
+        let mut stmt = conn.prepare(
+            "SELECT media_id FROM lyrics WHERE plain_text LIKE ?1 ESCAPE '\\' \
+             ORDER BY updated_at DESC LIMIT 50",
+        )?;
+        let rows = stmt.query_map(params![pattern], |row| row.get(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row?);
+        }
+        Ok(ids)
+    }
+
     #[allow(dead_code)]
     pub fn count_media(conn: &Connection) -> Result<i64> {
         Ok(conn.query_row("SELECT COUNT(*) FROM media", [], |row| row.get(0))?)

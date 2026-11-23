@@ -19,7 +19,9 @@ watch(viewMode, (value) => localStorage.setItem("slideup-video-view", value));
 const items = computed(() => {
   const query = library.search.trim().toLowerCase();
   const list = library.videoItems.filter((item) =>
-    !query || `${item.title} ${item.artist ?? ""}`.toLowerCase().includes(query),
+    !query ||
+    `${item.title} ${item.artist ?? ""}`.toLowerCase().includes(query) ||
+    library.matchedLyricsMediaIds.has(item.id),
   );
   return [...list].sort((a, b) => b.addedAt - a.addedAt);
 });
@@ -46,10 +48,16 @@ async function scanFolder() {
   }
 }
 
+import { confirmAction } from "../utils/dialog";
+
 async function clearAll() {
   const count = library.videoItems.length;
   if (!count) return;
-  if (!window.confirm(`Remove all ${count} videos from the video library? Files on disk will not be deleted.`)) return;
+  const confirmed = await confirmAction(
+    `Are you sure you want to remove all ${count} videos from the video library?\n\nFiles on disk will not be deleted.`,
+    { title: "Clear Video Library", kind: "warning", okLabel: "Clear Library" }
+  );
+  if (!confirmed) return;
   try {
     const removed = await library.clear("video");
     toast.success(`Removed ${removed} video${removed === 1 ? "" : "s"} from the library.`);

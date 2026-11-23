@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api, events, onEvent } from "../services/tauri";
 import type { MediaFilter, MediaItem, ScanResult } from "../types/media";
@@ -10,6 +10,7 @@ export const useLibraryStore = defineStore("library", () => {
   const items = ref<MediaItem[]>([]);
   const recent = ref<MediaItem[]>([]);
   const search = ref("");
+  const matchedLyricsMediaIds = ref<Set<number>>(new Set());
   const kindFilter = ref<"all" | "audio" | "video">("all");
   const favoritesOnly = ref(false);
   const sortBy = ref<SortKey>("added");
@@ -36,6 +37,7 @@ export const useLibraryStore = defineStore("library", () => {
       if (kindFilter.value !== "all" && item.kind !== kindFilter.value) return false;
       if (favoritesOnly.value && !item.favorite) return false;
       if (!needle) return true;
+      if (matchedLyricsMediaIds.value.has(item.id)) return true;
       return [item.title, item.artist, item.album, item.codec]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(needle));
@@ -79,9 +81,29 @@ export const useLibraryStore = defineStore("library", () => {
 
   function resetFilters() {
     search.value = "";
+    matchedLyricsMediaIds.value.clear();
     kindFilter.value = "all";
     favoritesOnly.value = false;
   }
+
+  // Debounced search for lyrics in database when search query changes
+  let searchLyricsTimeout: ReturnType<typeof setTimeout> | null = null;
+  watch(search, (query) => {
+    if (searchLyricsTimeout) clearTimeout(searchLyricsTimeout);
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      matchedLyricsMediaIds.value.clear();
+      return;
+    }
+    searchLyricsTimeout = setTimeout(async () => {
+      try {
+        const ids = await api.searchLyrics(trimmed);
+        matchedLyricsMediaIds.value = new Set(ids);
+      } catch (err) {
+        console.warn("searchLyrics failed:", err);
+      }
+    }, 200);
+  });
 
   async function refresh() {
     loading.value = true;
@@ -219,6 +241,7 @@ export const useLibraryStore = defineStore("library", () => {
     items,
     recent,
     search,
+    matchedLyricsMediaIds,
     kindFilter,
     favoritesOnly,
     sortBy,

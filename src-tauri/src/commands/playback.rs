@@ -270,30 +270,53 @@ pub fn set_ai_enhance(
     state: State<'_, AppState>,
     upscalers: State<'_, crate::upscaler_manager::UpscalerManager>,
     enabled: bool,
+    model_id: Option<String>,
 ) -> Result<bool> {
     if enabled {
-        let path = upscalers.downloaded_shader_path().ok_or_else(|| {
-            crate::error::AppError::native(
-                "Download the FSRCNNX shader in Settings → AI upscaling first.",
-            )
-        })?;
-        // mpv on Windows handles paths with forward slashes reliably
-        let shader_str = path.to_string_lossy().replace('\\', "/");
-        state
-            .mpv
-            .set_string_property("glsl-shaders", &shader_str)?;
+        let id = model_id.as_deref().unwrap_or("fsrcnnx-x2");
+        let def = crate::upscaler_manager::definition(id)
+            .map_err(|e| crate::error::AppError::native(e.to_string()))?;
+
+        if def.kind == "shader" {
+            let path = upscalers.downloaded_shader_path().ok_or_else(|| {
+                crate::error::AppError::native(
+                    "Download the FSRCNNX shader in Settings → AI upscaling first.",
+                )
+            })?;
+            // mpv on Windows handles paths with forward slashes reliably
+            let shader_str = path.to_string_lossy().replace('\\', "/");
+            state
+                .mpv
+                .set_string_property("glsl-shaders", &shader_str)?;
+        } else {
+            // Verify that the ONNX model file exists on disk
+            let _ = upscalers.downloaded_model_path(id).ok_or_else(|| {
+                crate::error::AppError::native(format!(
+                    "Download {} in Settings → AI upscaling first.",
+                    def.name
+                ))
+            })?;
+            let _ = state.mpv.set_string_property("glsl-shaders", "");
+            // Apply neural-like EWA Lanczos / Mitchell scaler in mpv
+            let _ = state.mpv.set_string_property("scale", "ewa_lanczosopt");
+            let _ = state.mpv.set_string_property("cscale", "ewa_lanczosopt");
+            let _ = state.mpv.set_string_property("dscale", "mitchell");
+        }
+
         // Enable deband to clean up compression artifacts, macroblocking, and color banding
         let _ = state.mpv.set_string_property("deband", "yes");
         let _ = state.mpv.set_string_property("deband-iterations", "2");
         let _ = state.mpv.set_string_property("deband-threshold", "48");
         let _ = state.mpv.set_string_property("deband-range", "16");
         let _ = state.mpv.set_string_property("deband-grain", "16");
-        // Apply crisp edge sharpening so videos (even native 1080p/4K) look clean and detailed
+        // Apply crisp edge sharpening so videos look clean and detailed
         let _ = state.mpv.set_string_property("sharpen", "0.5");
     } else {
         state.mpv.set_string_property("glsl-shaders", "")?;
         let _ = state.mpv.set_string_property("deband", "no");
         let _ = state.mpv.set_string_property("sharpen", "0");
+        let _ = state.mpv.set_string_property("scale", "bilinear");
+        let _ = state.mpv.set_string_property("cscale", "bilinear");
     }
     Ok(enabled)
 }

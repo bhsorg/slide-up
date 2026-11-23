@@ -1,8 +1,11 @@
 [package]
 name = "slide-up"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "High-performance modern desktop media player with AI upscaling, live TV, lyrics, and offline captions."
+authors = ["bhsorg"]
+homepage = "https://bloghindisupport.com"
+repository = "https://github.com/bhsorg/slide-up"
+license = "GPL-3.0-only"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

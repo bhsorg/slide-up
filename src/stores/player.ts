@@ -18,11 +18,17 @@ export const usePlayerStore = defineStore("player", () => {
   const aiEnhance = ref(false);
   const aiEnhanceAvailable = ref(false);
   const realesrganAvailable = ref(false);
+  const activeAiModel = ref<string>("fsrcnnx-x2");
+  const upscalerModels = ref<import("../types/model").UpscalerModelStatus[]>([]);
   const initialized = ref(false);
   const unlisteners: Array<() => void> = [];
 
   const isPlaying = computed(() => state.value.status === "playing");
   const isVideo = computed(() => state.value.current?.kind === "video");
+  const activeAiModelName = computed(() => {
+    const found = upscalerModels.value.find((m) => m.id === activeAiModel.value);
+    return found ? found.name : "FSRCNNX x2";
+  });
   const hasTrack = computed(() => !!state.value.current);
   const isLive = computed(() => {
     const current = state.value.current;
@@ -267,25 +273,39 @@ export const usePlayerStore = defineStore("player", () => {
     await api.setAspectRatio(ratio);
   }
 
-  async function setAiEnhance(enabled: boolean) {
-    aiEnhance.value = await api.setAiEnhance(enabled);
+  async function setAiEnhance(enabled: boolean, modelId?: string) {
+    const targetModel = modelId ?? activeAiModel.value;
+    if (modelId) activeAiModel.value = modelId;
+    aiEnhance.value = await api.setAiEnhance(enabled, targetModel);
     return aiEnhance.value;
   }
 
-  function toggleAiEnhance() {
-    return setAiEnhance(!aiEnhance.value);
+  function toggleAiEnhance(modelId?: string) {
+    return setAiEnhance(!aiEnhance.value, modelId);
+  }
+
+  async function setActiveAiModel(modelId: string) {
+    activeAiModel.value = modelId;
+    if (aiEnhance.value) {
+      await setAiEnhance(true, modelId);
+    }
   }
 
   /** Reflect which offline upscaler assets are installed. */
   async function refreshAiEnhanceAvailability() {
     try {
       const models = await api.listUpscalerModels();
-      aiEnhanceAvailable.value = models.some(
-        (model) => model.kind === "shader" && model.isDownloaded,
-      );
+      upscalerModels.value = models;
+      aiEnhanceAvailable.value = models.some((model) => model.isDownloaded);
       realesrganAvailable.value = models.some(
         (model) => model.id === "realesr-general-x4v3" && model.isDownloaded,
       );
+      // Auto-select first installed model if active model is not downloaded
+      const currentInstalled = models.find((m) => m.id === activeAiModel.value && m.isDownloaded);
+      if (!currentInstalled) {
+        const firstInstalled = models.find((m) => m.isDownloaded);
+        if (firstInstalled) activeAiModel.value = firstInstalled.id;
+      }
       if (!aiEnhanceAvailable.value && aiEnhance.value) await setAiEnhance(false);
     } catch {
       aiEnhanceAvailable.value = false;
@@ -369,8 +389,12 @@ export const usePlayerStore = defineStore("player", () => {
     aiEnhance,
     aiEnhanceAvailable,
     realesrganAvailable,
+    activeAiModel,
+    activeAiModelName,
+    upscalerModels,
     setAiEnhance,
     toggleAiEnhance,
+    setActiveAiModel,
     refreshAiEnhanceAvailability,
     upscaleVideo,
     setVideoTrack,

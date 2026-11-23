@@ -26,7 +26,6 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt().init();
 
@@ -266,6 +265,7 @@ pub fn run() {
             commands::library::has_subtitle,
             commands::lyrics::get_lyrics,
             commands::lyrics::save_lyrics,
+            commands::lyrics::search_lyrics,
             commands::playback::get_snapshot,
             commands::playback::list_audio_devices,
             commands::playback::play_media,

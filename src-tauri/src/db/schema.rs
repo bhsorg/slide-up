@@ -57,6 +57,19 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS lyrics (
+            media_id    INTEGER PRIMARY KEY,
+            track_name  TEXT NOT NULL DEFAULT '',
+            artist_name TEXT NOT NULL DEFAULT '',
+            synced      INTEGER NOT NULL DEFAULT 0,
+            plain_text  TEXT NOT NULL DEFAULT '',
+            json_data   TEXT NOT NULL,
+            updated_at  INTEGER NOT NULL,
+            FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_lyrics_plain_text ON lyrics(plain_text COLLATE NOCASE);
         "#,
     )
 }

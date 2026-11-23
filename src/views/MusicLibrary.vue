@@ -19,7 +19,9 @@ watch(viewMode, (value) => localStorage.setItem("slideup-music-view", value));
 const items = computed(() => {
   const query = library.search.trim().toLowerCase();
   const list = library.audioItems.filter((item) =>
-    !query || `${item.title} ${item.artist ?? ""} ${item.album ?? ""}`.toLowerCase().includes(query),
+    !query ||
+    `${item.title} ${item.artist ?? ""} ${item.album ?? ""}`.toLowerCase().includes(query) ||
+    library.matchedLyricsMediaIds.has(item.id),
   );
   return sort(list);
 });
@@ -58,10 +60,16 @@ async function scanFolder() {
   }
 }
 
+import { confirmAction } from "../utils/dialog";
+
 async function clearAll() {
   const count = library.audioItems.length;
   if (!count) return;
-  if (!window.confirm(`Remove all ${count} tracks from the music library? Files on disk will not be deleted.`)) return;
+  const confirmed = await confirmAction(
+    `Are you sure you want to remove all ${count} tracks from the music library?\n\nFiles on disk will not be deleted.`,
+    { title: "Clear Music Library", kind: "warning", okLabel: "Clear Library" }
+  );
+  if (!confirmed) return;
   try {
     const removed = await library.clear("audio");
     toast.success(`Removed ${removed} track${removed === 1 ? "" : "s"} from the library.`);

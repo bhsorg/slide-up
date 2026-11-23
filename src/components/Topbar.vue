@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Search, Sun, Moon, Minus, Square, X, X as ClearIcon, Settings, RefreshCw, Info } from "@lucide/vue";
+import { api } from "../services/tauri";
+import AppLogo from "./AppLogo.vue";
+import { Search, Sun, Moon, Minus, Square, X, X as ClearIcon, Settings, RefreshCw, Info, Mic, MicOff } from "@lucide/vue";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
 import { useSettingsStore } from "../stores/settings";
@@ -49,7 +51,71 @@ async function checkUpdate() {
   menuOpen.value = false;
   toast.info("Checking for updates...", "Update");
   await new Promise((resolve) => setTimeout(resolve, 800));
-  toast.success("You are running the latest version of Slide Up (v1.0.0).", "Up to date");
+  let ver = "0.1.0";
+  try {
+    const v = await api.getAppVersion();
+    if (v) ver = v;
+  } catch { }
+  toast.success(`You are running the latest version of Slide Up (v${ver}).`, "Up to date");
+}
+
+// Voice / Microphone search using Web Speech Recognition API
+const isListening = ref(false);
+let recognition: any = null;
+
+function toggleVoiceSearch() {
+  const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    toast.error("Speech recognition is not supported in this environment.", "Microphone");
+    return;
+  }
+
+  if (isListening.value) {
+    if (recognition) {
+      recognition.stop();
+    }
+    isListening.value = false;
+    return;
+  }
+
+  try {
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = "hi-IN,en-US"; // supports Hindi and English lyrics / track search
+
+    recognition.onstart = () => {
+      isListening.value = true;
+      toast.info("Listening... Speak a song title or lyrics line", "Voice Search");
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results?.[0]?.[0]?.transcript;
+      if (transcript) {
+        library.search = transcript.trim();
+        toast.success(`Searching: "${transcript.trim()}"`, "Voice Search");
+      }
+      isListening.value = false;
+    };
+
+    recognition.onerror = (event: any) => {
+      console.warn("SpeechRecognition error:", event.error);
+      if (event.error !== "no-speech") {
+        toast.error(`Microphone error: ${event.error}`, "Voice Search");
+      }
+      isListening.value = false;
+    };
+
+    recognition.onend = () => {
+      isListening.value = false;
+    };
+
+    recognition.start();
+  } catch (err) {
+    console.error("Failed to start voice recognition:", err);
+    toast.error("Could not access microphone.", "Voice Search");
+    isListening.value = false;
+  }
 }
 
 async function windowAction(action: "minimize" | "maximize" | "close") {
@@ -74,20 +140,12 @@ async function windowAction(action: "minimize" | "maximize" | "close") {
 </script>
 
 <template>
-  <header class="flex h-[var(--topbar-height)] shrink-0 items-center border-b border-line bg-secondary px-3">
+  <header
+    class="relative flex h-[var(--topbar-height)] shrink-0 items-center border-b border-line bg-secondary px-3 select-none">
     <!-- Left: Brand & Logo aligned with Sidebar width -->
-    <div class="flex w-[var(--sidebar-width)] shrink-0 items-center gap-2.5 pr-2">
-      <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-        <svg viewBox="0 0 44 44" class="h-7 w-7" aria-hidden="true">
-          <defs>
-            <linearGradient id="topbar-logo-gradient" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#873fff" />
-              <stop offset="100%" stop-color="#28b8ff" />
-            </linearGradient>
-          </defs>
-          <path d="M8 4.5 38 21 8 39.5Z" fill="url(#topbar-logo-gradient)" />
-          <path d="M8 4.5 8 39.5 23 30.5Z" fill="#28b8ff" opacity="0.7" />
-        </svg>
+    <div class="flex w-[var(--sidebar-width)] shrink-0 items-center gap-2.5 pr-2 z-10">
+      <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg overflow-hidden">
+        <AppLogo class="h-7 w-7 object-contain" />
       </div>
       <div class="min-w-0">
         <div class="truncate text-[14px] font-bold tracking-tight text-ink">Slide Up</div>
@@ -95,33 +153,37 @@ async function windowAction(action: "minimize" | "maximize" | "close") {
       </div>
     </div>
 
-    <!-- Center: Search input perfectly centered -->
-    <div class="flex flex-1 items-center justify-center px-4">
-      <div class="relative w-full max-w-[440px]">
-        <Search :size="15" class="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-faint" />
+    <!-- Center: Search input absolutely centered relative to the whole window -->
+    <div class="pointer-events-none absolute inset-x-0 top-0 flex h-full items-center justify-center z-20">
+      <div class="pointer-events-auto relative w-full max-w-[460px] px-4">
+        <Search :size="15" class="pointer-events-none absolute left-7.5 top-1/2 -translate-y-1/2 text-faint" />
         <input
           v-model="library.search"
           type="search"
-          placeholder="Search media, artists, albums..."
-          class="h-8.5 w-full rounded-lg border border-line bg-panel pl-9.5 pr-9 text-[12px] text-ink outline-none transition-colors placeholder:text-faint focus:border-purple/60 focus:bg-elevated"
+placeholder="Search media, artists, albums, or lyrics..."
+          class="h-8.5 w-full rounded-lg border border-line bg-panel pl-9.5 pr-16 text-[12px] text-ink outline-none transition-colors placeholder:text-faint focus:border-purple/60 focus:bg-elevated"
         />
-        <button
-          v-if="library.search"
-          type="button"
-          class="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-0.5 text-faint hover:bg-hover hover:text-ink"
-          title="Clear search"
-          @click="library.search = ''"
-        >
-          <ClearIcon :size="13" />
-        </button>
+        <div class="absolute right-6 top-1/2 -translate-y-1/2 flex items-center gap-1">
+          <button v-if="library.search" type="button" class="rounded-md p-0.5 text-faint hover:bg-hover hover:text-ink"
+            title="Clear search" @click="library.search = ''">
+            <ClearIcon :size="13" />
+          </button>
+          <button type="button" class="rounded-md p-1 transition-colors"
+            :class="isListening ? 'bg-red-500/20 text-red-400 animate-pulse' : 'text-faint hover:bg-hover hover:text-ink'"
+            :title="isListening ? 'Listening... click to stop' : 'Search by voice / microphone (Song or lyrics)'"
+            @click="toggleVoiceSearch">
+            <Mic v-if="!isListening" :size="14" />
+            <MicOff v-else :size="14" />
+          </button>
+        </div>
       </div>
     </div>
 
-    <!-- Frameless window: empty drag handle -->
+    <!-- Frameless window: drag handle filling remaining space -->
     <div data-tauri-drag-region class="h-full flex-1 self-stretch"></div>
 
     <!-- Right: Theme switcher & Window Controls -->
-    <div class="ml-auto flex shrink-0 items-center gap-2">
+    <div class="ml-auto flex shrink-0 items-center gap-2 z-10">
       <!-- Theme switcher -->
       <div class="flex items-center rounded-full border border-line bg-panel p-0.5">
         <button

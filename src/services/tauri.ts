@@ -45,6 +45,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 export const api = {
   appVersion: () => call<string>("app_version"),
+  getAppVersion: () => call<string>("app_version"),
   openExternal: (url: string) => call<void>("open_external", { url }),
   showInFolder: (path: string) => call<void>("show_in_folder", { path }),
   fetchUrlText: (url: string) => call<string>("fetch_url_text", { url }),
@@ -93,7 +94,8 @@ export const api = {
   setSubtitleDelay: (delayMs: number) => call<void>("set_subtitle_delay", { delayMs }),
   frameStep: () => call<void>("frame_step"),
   setAspectRatio: (ratio: string) => call<void>("set_aspect_ratio", { ratio }),
-  setAiEnhance: (enabled: boolean) => call<boolean>("set_ai_enhance", { enabled }),
+  setAiEnhance: (enabled: boolean, modelId?: string) =>
+    call<boolean>("set_ai_enhance", { enabled, modelId: modelId ?? null }),
   screenshot: () => call<string>("screenshot"),
   syncVideoRect: (x: number, y: number, width: number, height: number) =>
     call<void>("sync_video_rect", { x, y, width, height }),
@@ -105,6 +107,7 @@ export const api = {
   getLyrics: (mediaId: number) => call<CachedLyrics | null>("get_lyrics", { mediaId }),
   saveLyrics: (mediaId: number, result: LyricsResult | null) =>
     call<void>("save_lyrics", { mediaId, result }),
+  searchLyrics: (query: string) => call<number[]>("search_lyrics", { query }),
   getStoryboardFrame: (mediaId: number, index: number) =>
     call<string | null>("get_storyboard_frame", { mediaId, index }),
   generateStoryboard: (mediaId: number) =>

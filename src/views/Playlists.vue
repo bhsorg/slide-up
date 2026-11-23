@@ -14,6 +14,7 @@ import { useMediaProperties } from "../composables/useMediaProperties";
 import { useStoryboardTask } from "../composables/useStoryboardTask";
 import { useSubtitleAvailability } from "../composables/useSubtitleAvailability";
 import { formatDuration, formatBytes } from "../types/media";
+import { confirmAction } from "../utils/dialog";
 import { parseTorrent } from "../utils/torrent";
 import type { ParsedTorrentResult } from "../utils/torrent";
 import type { MediaItem } from "../types/media";
@@ -262,6 +263,13 @@ async function rename(id: number) {
 }
 
 async function remove(id: number) {
+  const pl = playlists.playlists.find((p) => p.id === id);
+  const name = pl?.name ?? "this playlist";
+  const confirmed = await confirmAction(
+    `Are you sure you want to delete “${name}”?\n\nTracks in your media library will not be deleted.`,
+    { title: "Delete Playlist", kind: "warning", okLabel: "Delete" }
+  );
+  if (!confirmed) return;
   try {
     await playlists.remove(id);
     toast.info("Playlist deleted.");

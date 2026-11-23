@@ -36,6 +36,53 @@ fn persist_storyboard(data_dir: &Path, media_id: i64, enabled: bool) {
     let _ = std::fs::rename(&temp, &target);
 }
 
+/// Spawns a background worker to generate storyboard seek-previews for newly imported videos
+/// without blocking the UI or library list.
+fn spawn_storyboard_worker(
+    app: AppHandle,
+    data_dir: PathBuf,
+    queue: Vec<(i64, PathBuf)>,
+) {
+    if queue.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        for (media_id, path) in queue {
+            let progress_app = app.clone();
+            let progress = std::sync::Arc::new(move |done: usize, total: usize| {
+                let _ = progress_app.emit(
+                    events::STORYBOARD_PROGRESS,
+                    serde_json::json!({
+                        "mediaId": media_id,
+                        "done": done,
+                        "total": total,
+                        "status": "running",
+                    }),
+                );
+            });
+
+            let res = metadata::video::probe(
+                &path,
+                media_id,
+                &data_dir,
+                true,
+                Some(progress),
+            );
+            persist_storyboard(&data_dir, media_id, true);
+
+            let _ = app.emit(
+                events::STORYBOARD_PROGRESS,
+                serde_json::json!({
+                    "mediaId": media_id,
+                    "done": metadata::video::STORYBOARD_FRAMES,
+                    "total": metadata::video::STORYBOARD_FRAMES,
+                    "status": if res.is_ok() { "done" } else { "error" },
+                }),
+            );
+        }
+    });
+}
+
 fn classify(path: &Path) -> Option<MediaKind> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     if AUDIO_EXTENSIONS.contains(&extension.as_str()) {
@@ -215,6 +262,7 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
     let mut added = 0usize;
     let mut updated = 0usize;
     let mut paths = Vec::new();
+    let mut storyboard_queue = Vec::new();
 
     let walker = WalkDir::new(&root).follow_links(false);
     let walker = if prefs.0 { walker } else { walker.max_depth(1) };
@@ -262,7 +310,9 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
                 )
             }
             MediaKind::Video => {
-                let info = match metadata::video::probe(entry.path(), 0, &state.data_dir, prefs.4, None) {
+                // Generate only metadata and the single cover thumbnail during scan (false for storyboard).
+                // Storyboard frames are generated in the background after the library updates.
+                let info = match metadata::video::probe(entry.path(), 0, &state.data_dir, false, None) {
                     Ok(info) => info,
                     Err(_) => continue,
                 };
@@ -313,8 +363,8 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
                     if let Some(path) = thumbnail {
                         let _ = Repository::set_thumbnail(&conn, id, Some(&path));
                     }
-                    if kind == MediaKind::Video {
-                        persist_storyboard(&state.data_dir, id, prefs.4);
+                    if kind == MediaKind::Video && prefs.4 && new_media.duration_ms > 0 {
+                        storyboard_queue.push((id, entry.path().to_path_buf()));
                     }
                 }
                 Err(_) => continue,
@@ -335,7 +385,14 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
         0
     };
 
+    // Library changed event emitted immediately so UI updates and shows all items at once!
     let _ = state.app.emit(events::LIBRARY_CHANGED, ());
+
+    // Queue storyboard generation in the background so it never blocks the list.
+    if prefs.4 && !storyboard_queue.is_empty() {
+        spawn_storyboard_worker(state.app.clone(), state.data_dir.clone(), storyboard_queue);
+    }
+
     Ok(ScanResult {
         found,
         added,
@@ -356,6 +413,8 @@ pub(crate) fn import_files_impl(state: &AppState, paths: Vec<String>) -> Result<
     };
     let mut added = 0usize;
     let mut updated = 0usize;
+    let mut storyboard_queue = Vec::new();
+
     for path in &paths {
         let path = Path::new(path);
         let Some(kind) = classify(path) else {
@@ -384,7 +443,8 @@ pub(crate) fn import_files_impl(state: &AppState, paths: Vec<String>) -> Result<
                 )
             }
             MediaKind::Video => {
-                let info = metadata::video::probe(path, 0, &state.data_dir, prefs.2, None)?;
+                // Generate only metadata and cover thumbnail on import (false for storyboard).
+                let info = metadata::video::probe(path, 0, &state.data_dir, false, None)?;
                 (None, None, info.duration_ms, info.codec, Some(info.width), Some(info.height), None)
             }
         };
@@ -423,11 +483,19 @@ pub(crate) fn import_files_impl(state: &AppState, paths: Vec<String>) -> Result<
         if let Some(path) = thumbnail {
             let _ = Repository::set_thumbnail(&conn, id, Some(&path));
         }
-        if kind == MediaKind::Video {
-            persist_storyboard(&state.data_dir, id, prefs.2);
+        if kind == MediaKind::Video && prefs.2 && new_media.duration_ms > 0 {
+            storyboard_queue.push((id, path.to_path_buf()));
         }
     }
+
+    // Library changed event emitted immediately so UI updates and shows newly imported items instantly!
     let _ = state.app.emit(events::LIBRARY_CHANGED, ());
+
+    // Generate storyboards asynchronously in background
+    if prefs.2 && !storyboard_queue.is_empty() {
+        spawn_storyboard_worker(state.app.clone(), state.data_dir.clone(), storyboard_queue);
+    }
+
     Ok(ScanResult { found: paths.len(), added, updated, removed: 0 })
 }
 

@@ -1,5 +1,14 @@
 {
   "name": "slide-up",
+  "displayName": "Slide Up",
+  "description": "High-performance modern desktop media player with AI upscaling, live TV, lyrics, and offline captions.",
+  "homepage": "https://bloghindisupport.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bhsorg/slide-up.git"
+  },
+  "author": "bhsorg",
+  "license": "GPL-3.0-only",
   "private": true,
   "version": "0.1.0",
   "type": "module",
