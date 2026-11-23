@@ -15,14 +15,28 @@
 [![libmpv](https://img.shields.io/badge/Engine-libmpv--2-red.svg)](https://mpv.io/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4.0-38B2AC.svg?logo=tailwindcss)](https://tailwindcss.com/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Donate](https://img.shields.io/badge/Donate-Buy%20Me%20A%20Coffee-yellow.svg?logo=buy-me-a-coffee)](https://buymeacoffee.com/hinditutorpoint)
 
-[Features](#key-features) • [Architecture](#architecture) • [Keyboard Shortcuts](#default-keyboard-shortcuts) • [Installation & Development](#installation--development) • [AI Features](#ai-features)
+[Download](#-download) • [Features](#key-features) • [Architecture](#architecture) • [Keyboard Shortcuts](#default-keyboard-shortcuts) • [Installation](#installation--development) • [Contributing](#-contributing) • [Donate](#-support--donations)
 
 <br /><br />
 
 ![Slide Up Desktop](screenshots/slideup.png)
 
 </div>
+
+---
+
+## 📥 Download
+
+Get the latest stable release of **Slide Up** for your platform:
+
+| Platform | Download Link | Notes |
+| :--- | :--- | :--- |
+| **Windows 10 / 11 (64-bit)** | [![Download Windows](https://img.shields.io/badge/Download-Latest%20Installer%20(.exe%20%2F%20.msi)-blue?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/bhsorg/slide-up/releases/latest) | Automatic in-app updates, hardware acceleration & bundled libmpv |
+| **Android Edition** | [![Download Android](https://img.shields.io/badge/Android-GitHub%20Edition-green?style=for-the-badge&logo=android&logoColor=white)](https://hinditutorpoint.github.io/slideup/) | Dedicated mobile edition for phones and tablets |
+
+> 💡 **Tip**: All releases, changelogs, and installer assets are available on the [GitHub Releases Page](https://github.com/bhsorg/slide-up/releases).
 
 ---
 
@@ -169,6 +183,49 @@ slide-up/
 - **Android Version Repo**: [https://github.com/hinditutorpoint/slideup](https://github.com/hinditutorpoint/slideup)
 - **Android Version Website**: [https://hinditutorpoint.github.io/slideup/](https://hinditutorpoint.github.io/slideup/)
 - **License**: Slide Up is licensed under the **GNU General Public License v3.0 (GPLv3)**. Any modified distribution or fork must remain open source under the same license terms.
+
+---
+
+## 🤝 Contributing
+
+Contributions are warmly welcome! Whether it's reporting a bug, proposing a new feature, improving documentation, or submitting a pull request:
+
+1. **Fork the Repository** on GitHub.
+2. **Create your Feature Branch**:
+   ```bash
+   git checkout -b feature/AmazingFeature
+   ```
+3. **Commit your Changes**:
+   ```bash
+   git commit -m "feat: add some amazing feature"
+   ```
+4. **Push to the Branch**:
+   ```bash
+   git push origin feature/AmazingFeature
+   ```
+5. **Open a Pull Request**: Submit your PR with a clear description of the enhancements.
+
+Feel free to open an issue in the [GitHub Issue Tracker](https://github.com/bhsorg/slide-up/issues) if you encounter any bugs or have feature suggestions.
+
+---
+
+## 💖 Support & Donations
+
+**Slide Up** is a completely free, open-source project created with passion to provide an exceptional, ad-free desktop media experience.
+
+If you enjoy using Slide Up and want to support its ongoing development, new AI capabilities, and open-source maintenance, please consider buying a coffee! Every contribution keeps the project thriving.
+
+<div align="center">
+
+<a href="https://buymeacoffee.com/hinditutorpoint" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50" style="height: 50px !important;width: 217px !important;" />
+</a>
+
+<br /><br />
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-hinditutorpoint-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/hinditutorpoint)
+
+</div>
 
 ---
 
