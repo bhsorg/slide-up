@@ -10,6 +10,7 @@ import AudioPlayer from "./components/AudioPlayer.vue";
 import PlaylistPanel from "./components/PlaylistPanel.vue";
 import PlaylistPicker from "./components/PlaylistPicker.vue";
 import MediaProperties from "./components/MediaProperties.vue";
+import ArtistBioModal from "./components/ArtistBioModal.vue";
 import SplashScreen from "./components/SplashScreen.vue";
 import PlaybackDock from "./components/PlaybackDock.vue";
 import Home from "./views/Home.vue";
@@ -19,13 +20,15 @@ import Playlists from "./views/Playlists.vue";
 import Favorites from "./views/Favorites.vue";
 import Recent from "./views/Recent.vue";
 import Settings from "./views/Settings.vue";
+import LiveTv from "./views/LiveTv.vue";
+import About from "./views/About.vue";
 import { useLibraryStore } from "./stores/library";
 import { usePlayerStore } from "./stores/player";
 import { usePlaylistStore } from "./stores/playlist";
 import { useSettingsStore } from "./stores/settings";
 import { useToast } from "./composables/useToast";
 import { useShortcuts } from "./composables/useShortcuts";
-import { api } from "./services/tauri";
+import { api, onEvent } from "./services/tauri";
 import type { ViewId } from "./types/settings";
 
 const library = useLibraryStore();
@@ -43,41 +46,44 @@ const windowFocused = ref(true);
 const splashVisible = ref(true);
 let unlistenDragDrop: (() => void) | null = null;
 let unlistenFocus: (() => void) | null = null;
-let surfaceModeToken = 0;
+let unlistenTaskbar: (() => void) | null = null;
 
-// When a video is playing but the user switches away from the player view,
-// the native video is rendered as a small borderless preview over the guitar
-// artwork in the sidebar footer, with no DOM controls on top of it.
+// Surface transparency and visibility management
+async function applySurfaceMode() {
+  try {
+    await getCurrentWebview().setBackgroundColor([0, 0, 0, 0]).catch(() => undefined);
+    await api.setVideoLayer(false).catch(() => undefined);
+  } catch {
+    // Surface may not exist yet
+  }
+}
+
+const isLiveTrack = computed(() => {
+  const current = player.state.current;
+  if (!current) return false;
+  return (
+    player.isLive ||
+    current.artist === "Live TV" ||
+    current.album === "Live TV" ||
+    (current.id && current.id < -1000)
+  );
+});
+
+const sidebarView = computed<ViewId>(() => {
+  if (view.value === "player") {
+    if (isLiveTrack.value) return "tv";
+    return player.isVideo ? "videos" : "music";
+  }
+  return view.value;
+});
+const isFullScreenVideo = computed(() => (player.state.fullscreen || player.isPip) && player.isVideo && view.value === "player");
+
+// When a video is playing and the user switches away from the player view,
+// the native video is rendered as a mini preview over the guitar card in the sidebar footer.
 const miniVideo = computed(
   () => player.isVideo && view.value !== "player" && !isFullScreenVideo.value,
 );
 
-// Transparency is only useful while the player has focus: it lets the DOM
-// controls and context menu sit above the native video. When another app is
-// active, switch to an opaque webview with the video on top so DWM does not
-// alpha-composite the entire WebView2 surface every frame.
-async function applySurfaceMode(focused: boolean) {
-  const token = ++surfaceModeToken;
-  // Mini preview over the sidebar guitar art: native video on top of an
-  // opaque webview, with no DOM controls at all.
-  if (miniVideo.value) {
-    await api.setVideoLayer(true).catch(() => undefined);
-    if (token !== surfaceModeToken) return;
-    await getCurrentWebview().setBackgroundColor([8, 13, 29, 255]).catch(() => undefined);
-    return;
-  }
-  if (focused) {
-    await getCurrentWebview().setBackgroundColor([0, 0, 0, 0]).catch(() => undefined);
-    if (token !== surfaceModeToken) return;
-    await api.setVideoLayer(false).catch(() => undefined);
-  } else {
-    await api.setVideoLayer(true).catch(() => undefined);
-    if (token !== surfaceModeToken) return;
-    await getCurrentWebview().setBackgroundColor([8, 13, 29, 255]).catch(() => undefined);
-  }
-}
-
-// Position the borderless native video over the sidebar guitar artwork.
 async function syncMiniVideo() {
   if (!miniVideo.value) return;
   const anchor = document.getElementById("mini-video-anchor");
@@ -94,57 +100,72 @@ async function syncMiniVideo() {
     );
     await api.setVideoLayer(true);
   } catch {
-    // Surface may not exist yet; the next focus/resize event retries.
+    // Surface may not exist yet
   }
 }
 
-const sidebarView = computed<ViewId>(() => (view.value === "player" ? (player.isVideo ? "videos" : "home") : view.value));
-const isFullScreenVideo = computed(() => (player.state.fullscreen || player.isPip) && player.isVideo && view.value === "player");
+function onWindowResize() {
+  if (miniVideo.value) {
+    void syncMiniVideo();
+  }
+}
 
-function navigate(next: ViewId) {
+function navigate(next: Screen) {
   view.value = next;
+  if (next !== "player" && !player.isPip) {
+    if (player.isVideo) {
+      void nextTick(syncMiniVideo);
+    } else {
+      void api.setSurfaceVisible(false).catch(() => undefined);
+    }
+  } else if (player.isVideo) {
+    void api.setVideoLayer(false).catch(() => undefined);
+    void api.setSurfaceVisible(true).catch(() => undefined);
+  }
 }
 
 function openPlayer() {
   if (player.hasTrack) {
     view.value = "player";
+    if (player.isVideo) {
+      void api.setVideoLayer(false).catch(() => undefined);
+      void api.setSurfaceVisible(true).catch(() => undefined);
+    }
   }
 }
 
-// When a video starts playing, automatically switch to player view so the video screen is visible
+let lastPlayedVideoId: number | null = null;
+
+// Only automatically switch to player view when a NEW video begins playing
 watch(
   () => [player.state.current?.id, player.isVideo] as const,
   ([id, isVideo]) => {
-    if (id && isVideo) {
+    if (id != null && isVideo && id !== lastPlayedVideoId) {
+      lastPlayedVideoId = id;
       view.value = "player";
-      // The native HWND is created lazily on first load; apply the current
-      // focus mode now so it does not stay above an already-focused webview.
-      void applySurfaceMode(windowFocused.value);
+      void api.setVideoLayer(false).catch(() => undefined);
+      void api.setSurfaceVisible(true).catch(() => undefined);
+    } else if (!isVideo) {
+      lastPlayedVideoId = null;
     }
   },
 );
 
-// Switch between the full player and the small borderless preview over the
-// sidebar guitar art when the user navigates away from the player view.
+// Switch between full video player and mini-video over the sidebar guitar card
 watch(
   miniVideo,
   async (active) => {
     await nextTick();
     if (active) {
-      await applySurfaceMode(windowFocused.value);
       await syncMiniVideo();
-    } else if (player.isVideo) {
-      await applySurfaceMode(windowFocused.value);
-    } else {
+    } else if (player.isVideo && view.value === "player") {
+      await api.setVideoLayer(false).catch(() => undefined);
+      await api.setSurfaceVisible(true).catch(() => undefined);
+    } else if (!player.isVideo) {
       await api.setSurfaceVisible(false).catch(() => undefined);
     }
   },
-  { flush: "post" },
 );
-
-function onWindowResize() {
-  if (miniVideo.value) void syncMiniVideo();
-}
 
 let dragTimeout: number | undefined;
 
@@ -183,14 +204,18 @@ onMounted(async () => {
   document.getElementById("boot-splash")?.remove();
   try {
     windowFocused.value = document.hasFocus();
-    await applySurfaceMode(windowFocused.value);
+    await applySurfaceMode();
     unlistenFocus = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       windowFocused.value = focused;
-      void applySurfaceMode(focused);
     });
     window.addEventListener("resize", onWindowResize);
     document.documentElement.dataset.theme = settings.theme;
     settings.initialize();
+    if (settings.settings.startMinimized) {
+      void getCurrentWindow().hide().catch(() => {});
+    } else {
+      void getCurrentWindow().show().catch(() => {});
+    }
     toast.initialize();
     shortcuts.initialize();
     await Promise.allSettled([
@@ -198,6 +223,11 @@ onMounted(async () => {
       player.initialize(),
       playlists.initialize(),
     ]);
+    unlistenTaskbar = await onEvent<string>("taskbar-action", (action) => {
+      if (action === "play_pause") player.togglePause();
+      else if (action === "previous") player.previous();
+      else if (action === "next") player.next();
+    });
     await initializeDragDrop();
   } finally {
     // Keep the splash up briefly so it does not flash on very fast starts.
@@ -213,6 +243,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", onWindowResize);
   unlistenDragDrop?.();
   unlistenFocus?.();
+  unlistenTaskbar?.();
   shortcuts.dispose();
   library.dispose();
   player.dispose();
@@ -222,17 +253,27 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-screen w-screen flex-col overflow-hidden text-ink">
-    <Topbar v-if="!isFullScreenVideo" />
+  <div
+    class="flex h-screen w-screen flex-col overflow-hidden text-ink"
+    :class="view === 'player' && player.isVideo ? 'bg-transparent' : 'bg-base'"
+  >
+    <Topbar v-if="!isFullScreenVideo" @navigate="navigate" />
 
-    <div class="flex min-h-0 flex-1 overflow-hidden">
+    <div
+      class="flex min-h-0 flex-1 overflow-hidden"
+      :class="view === 'player' && player.isVideo ? 'bg-transparent' : ''"
+    >
       <Sidebar v-if="!isFullScreenVideo" :active="sidebarView" @navigate="navigate" />
 
       <main
         class="min-w-0 flex-1 overflow-hidden"
         :class="view === 'player' && player.isVideo ? 'bg-transparent' : 'bg-base'"
       >
-        <VideoPlayer v-if="(view === 'player' || isFullScreenVideo) && player.isVideo" />
+        <VideoPlayer
+          v-if="(view === 'player' || isFullScreenVideo) && player.isVideo"
+          :queue-open="queueOpen"
+          @toggle-playlist="queueOpen = !queueOpen"
+        />
         <AudioPlayer v-else-if="view === 'player'" />
         <Home v-else-if="view === 'home'" @navigate="navigate" />
         <MusicLibrary v-else-if="view === 'music'" />
@@ -240,7 +281,9 @@ onBeforeUnmount(() => {
         <Playlists v-else-if="view === 'playlists'" />
         <Favorites v-else-if="view === 'favorites'" />
         <Recent v-else-if="view === 'recent'" />
-        <Settings v-else-if="view === 'settings'" />
+        <Settings v-else-if="view === 'settings'" @navigate="navigate" />
+        <LiveTv v-else-if="view === 'tv'" @open-player="openPlayer" />
+        <About v-else-if="view === 'about'" />
       </main>
 
       <PlaylistPanel v-if="!isFullScreenVideo" :open="queueOpen" @close="queueOpen = false" />
@@ -256,6 +299,7 @@ onBeforeUnmount(() => {
 
     <PlaylistPicker />
     <MediaProperties />
+    <ArtistBioModal />
     <SplashScreen :visible="splashVisible" />
 
     <div class="pointer-events-none fixed right-5 top-20 z-[60] flex w-[340px] flex-col gap-2">

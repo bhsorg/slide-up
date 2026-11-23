@@ -196,10 +196,37 @@ impl AppState {
     }
 
     pub fn play_media(&self, media: &MediaItem) -> Result<()> {
-        self.mpv.load(media)?;
+        let mut actual_media = media.clone();
         if let Ok(conn) = self.db.lock() {
-            let _ = Repository::record_play(&conn, media.id);
+            if actual_media.id <= 0
+                || actual_media.path.starts_with("http://")
+                || actual_media.path.starts_with("https://")
+                || actual_media.path.starts_with("rtmp://")
+                || actual_media.path.starts_with("rtsp://")
+            {
+                let new_media = crate::db::repository::NewMedia {
+                    path: actual_media.path.clone(),
+                    kind: actual_media.kind,
+                    title: actual_media.title.clone(),
+                    artist: actual_media.artist.clone(),
+                    album: actual_media.album.clone(),
+                    duration_ms: actual_media.duration_ms,
+                    codec: actual_media.codec.clone(),
+                    width: actual_media.width,
+                    height: actual_media.height,
+                    size_bytes: actual_media.size_bytes,
+                    fingerprint: format!("stream:{}", actual_media.path),
+                };
+                if let Ok((id, _)) = Repository::upsert_media(&conn, &new_media) {
+                    actual_media.id = id;
+                    if let Some(thumb) = &actual_media.thumbnail_path {
+                        let _ = Repository::set_thumbnail(&conn, id, Some(thumb));
+                    }
+                }
+            }
+            let _ = Repository::record_play(&conn, actual_media.id);
         }
+        self.mpv.load(&actual_media)?;
         let _ = self.app.emit(events::LIBRARY_CHANGED, ());
         self.emit_queue();
         Ok(())
@@ -235,8 +262,8 @@ impl AppState {
     }
 
     pub fn previous(&self) -> Result<()> {
-        let position = self.mpv.snapshot().position_ms;
-        if position > 3000 {
+        let snapshot = self.mpv.snapshot();
+        if snapshot.duration_ms > 0 && snapshot.position_ms > 3000 {
             return self.mpv.seek_ms(0);
         }
         let item = self.player.lock().unwrap().previous();

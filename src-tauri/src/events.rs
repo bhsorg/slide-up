@@ -13,3 +13,4 @@ pub const SETTINGS_CHANGED: &str = "settings://changed";
 pub const TOAST: &str = "app://toast";
 pub const MODEL_DOWNLOAD_PROGRESS: &str = "model-download-progress";
 pub const UPSCALER_DOWNLOAD_PROGRESS: &str = "upscaler-download-progress";
+pub const UPSCALE_PROGRESS: &str = "upscale-progress";

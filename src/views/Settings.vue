@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { Settings as SettingsIcon, FolderOpen, Keyboard, RotateCcw, Monitor, SlidersHorizontal, Subtitles, Palette, Volume2, Info, Link2, Plus, Trash2, Check, ExternalLink, Captions, Expand } from "@lucide/vue";
+import { Settings as SettingsIcon, FolderOpen, Keyboard, RotateCcw, Monitor, SlidersHorizontal, Subtitles, Palette, Volume2, Info, Link2, Plus, Trash2, Check, ExternalLink, Captions, Expand, Film } from "@lucide/vue";
 import CaptionSettings from "../components/CaptionSettings.vue";
 import UpscalerSettings from "../components/UpscalerSettings.vue";
 import { useSettingsStore } from "../stores/settings";
 import { useToast } from "../composables/useToast";
 import { api } from "../services/tauri";
-import type { AudioDevice, Shortcuts, FileAssociations } from "../types/settings";
+import type { AudioDevice, Shortcuts, FileAssociations, ViewId } from "../types/settings";
+
+const emit = defineEmits<{ (e: "navigate", view: ViewId): void }>();
 
 const settings = useSettingsStore();
 const toast = useToast();
@@ -28,6 +30,7 @@ const tabs = [
   { id: "playback", label: "Playback", icon: SlidersHorizontal, description: "Set default volume, speed and playback behaviour." },
   { id: "audio", label: "Audio output", icon: Volume2, description: "Choose the audio backend and output device." },
   { id: "subtitles", label: "Subtitles", icon: Subtitles, description: "Fine-tune subtitle appearance and timing." },
+  { id: "video", label: "Video & filters", icon: Film, description: "Adjust brightness, contrast, saturation and gamma." },
   { id: "captions", label: "Live captions", icon: Captions, description: "Manage the offline SenseVoice caption model and hardware acceleration." },
   { id: "upscalers", label: "AI upscaling", icon: Expand, description: "Download local SPAN, Real-ESRGAN and ESPCN upscaler models." },
   { id: "associations", label: "File associations", icon: Link2, description: "Choose which file types open with Slide Up." },
@@ -36,7 +39,18 @@ const tabs = [
 ] as const;
 
 type TabId = (typeof tabs)[number]["id"];
-const activeTab = ref<TabId>("appearance");
+const activeTab = ref<TabId>(
+  tabs.some((t) => t.id === settings.activeTab) ? (settings.activeTab as TabId) : "appearance",
+);
+
+watch(
+  () => settings.activeTab,
+  (newTab) => {
+    if (newTab && tabs.some((t) => t.id === newTab)) {
+      activeTab.value = newTab as TabId;
+    }
+  },
+);
 const activeTabMeta = computed(() => tabs.find((tab) => tab.id === activeTab.value)!);
 
 const associations = ref<FileAssociations | null>(null);
@@ -150,6 +164,29 @@ async function save(partial: Partial<typeof settings.settings>) {
     await settings.patch(partial);
   } catch (error) {
     toast.error(String(error), "Could not save settings");
+  }
+}
+
+type FilterKey = "videoBrightness" | "videoContrast" | "videoSaturation" | "videoGamma";
+
+async function changeFilter(key: FilterKey, value: number) {
+  const property = key.slice(5).toLowerCase();
+  void api.setVideoFilter(property, value).catch(() => {});
+  await save({ [key]: value } as Partial<typeof settings.settings>);
+}
+
+async function applyAutoFilters() {
+  try {
+    const filters = await api.autoVideoFilters();
+    await save({
+      videoBrightness: filters.brightness,
+      videoContrast: filters.contrast,
+      videoSaturation: filters.saturation,
+      videoGamma: filters.gamma,
+    });
+    toast.success("Applied optimal video filters.");
+  } catch (error) {
+    toast.error(String(error), "Could not analyze the video frame");
   }
 }
 
@@ -355,6 +392,15 @@ async function resetAll() {
                 <input type="checkbox" class="toggle" :checked="settings.settings.minimizeToTray" @change="save({ minimizeToTray: ($event.target as HTMLInputElement).checked })" />
               </div>
             </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Taskbar media controls (Windows)</div>
+                <div class="setting-hint">Show playback buttons (Play, Pause, Next, Prev, Exit) on taskbar thumbnail preview and keep music playing in background on close.</div>
+              </div>
+              <div class="setting-control">
+                <input type="checkbox" class="toggle" :checked="settings.settings.taskbarControls" @change="save({ taskbarControls: ($event.target as HTMLInputElement).checked })" />
+              </div>
+            </div>
           </div>
         </section>
 
@@ -497,6 +543,57 @@ async function resetAll() {
               <div class="setting-control">
                 <input type="number" min="-30000" max="30000" step="100" class="text-input w-28" :value="settings.settings.subtitleDelayMs" @change="save({ subtitleDelayMs: Number(($event.target as HTMLInputElement).value) })" />
                 <span class="unit">ms</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Video & filters -->
+        <section v-else-if="activeTab === 'video'" class="su-panel settings-section">
+          <div class="panel-body">
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Auto optimize</div>
+                <div class="setting-hint">Analyze the current frame and apply optimal filter values.</div>
+              </div>
+              <div class="setting-control">
+                <button type="button" class="btn-outline" @click="applyAutoFilters">Auto</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Brightness — {{ settings.settings.videoBrightness }}</div>
+                <div class="setting-hint">Change the overall lightness of the picture.</div>
+              </div>
+              <div class="setting-control">
+                <input type="range" min="-100" max="100" step="1" class="su-range w-48" :value="settings.settings.videoBrightness" :style="{ '--fill': `${((settings.settings.videoBrightness + 100) / 200) * 100}%` }" @change="changeFilter('videoBrightness', Number(($event.target as HTMLInputElement).value))" />
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Contrast — {{ settings.settings.videoContrast }}</div>
+                <div class="setting-hint">Difference between light and dark areas.</div>
+              </div>
+              <div class="setting-control">
+                <input type="range" min="-100" max="100" step="1" class="su-range w-48" :value="settings.settings.videoContrast" :style="{ '--fill': `${((settings.settings.videoContrast + 100) / 200) * 100}%` }" @change="changeFilter('videoContrast', Number(($event.target as HTMLInputElement).value))" />
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Saturation — {{ settings.settings.videoSaturation }}</div>
+                <div class="setting-hint">Intensity of colors.</div>
+              </div>
+              <div class="setting-control">
+                <input type="range" min="-100" max="100" step="1" class="su-range w-48" :value="settings.settings.videoSaturation" :style="{ '--fill': `${((settings.settings.videoSaturation + 100) / 200) * 100}%` }" @change="changeFilter('videoSaturation', Number(($event.target as HTMLInputElement).value))" />
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Gamma — {{ settings.settings.videoGamma }}</div>
+                <div class="setting-hint">Brightness of mid-tone colors.</div>
+              </div>
+              <div class="setting-control">
+                <input type="range" min="-100" max="100" step="1" class="su-range w-48" :value="settings.settings.videoGamma" :style="{ '--fill': `${((settings.settings.videoGamma + 100) / 200) * 100}%` }" @change="changeFilter('videoGamma', Number(($event.target as HTMLInputElement).value))" />
               </div>
             </div>
           </div>
@@ -670,6 +767,17 @@ async function resetAll() {
               </div>
               <span class="version-badge">1.0.0</span>
             </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">About & License View</div>
+                <div class="setting-hint">Open the dedicated about, architecture components and open source license view.</div>
+              </div>
+              <div class="setting-control">
+                <button type="button" class="btn-outline" @click="emit('navigate', 'about')">
+                  Open About & License
+                </button>
+              </div>
+            </div>
             <span v-if="settings.saving" class="saving">Saving…</span>
           </div>
         </section>
@@ -765,6 +873,8 @@ async function resetAll() {
 .custom-list { display: flex; flex-direction: column; gap: 0.4rem; }
 .custom-item { display: flex; align-items: center; gap: 0.7rem; padding: 0.4rem 0.5rem; border-radius: 0.5rem; background: var(--bg-base); }
 .custom-item .custom-kind { flex: 1; font-size: 0.68rem; color: var(--text-muted); }
+
+.dialog-transparent { background: rgba(16, 22, 43, 0.55) !important; backdrop-filter: blur(12px); }
 
 /* About */
 .about-line { display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0; font-size: 0.78rem; color: var(--text-secondary); }

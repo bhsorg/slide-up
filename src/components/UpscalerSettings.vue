@@ -174,8 +174,10 @@ onUnmounted(() => {
         <code>shaders</code> under your application data folder. Only entries with a verified
         source URL can be downloaded; the others are listed as a catalog until a source is
         confirmed. Once the FSRCNNX shader is installed, the video player shows an
-        <strong>AI Enhance</strong> button to apply it at runtime; ONNX upscaler models are
-        downloaded for future playback integration and are not applied yet.
+        <strong>AI Enhance</strong> button to apply it at runtime. Once Real-ESRGAN Compact is
+        installed, the player shows an <strong>Upscale Video</strong> button for offline 4x
+        video upscaling (requires ffmpeg and ffprobe on PATH). The remaining ONNX models do
+        not affect playback yet.
       </p>
     </div>
   </section>

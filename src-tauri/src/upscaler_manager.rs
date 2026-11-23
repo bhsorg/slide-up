@@ -171,6 +171,15 @@ impl UpscalerManager {
             .filter(|path| path.is_file())
     }
 
+    /// Full path of a downloaded model file, e.g. for offline upscaling.
+    pub fn downloaded_model_path(&self, id: &str) -> Option<PathBuf> {
+        DEFINITIONS
+            .iter()
+            .find(|model| model.id == id && model.url.is_some())
+            .map(|model| self.final_path(model))
+            .filter(|path| path.is_file())
+    }
+
     fn statuses(&self) -> Vec<UpscalerModelStatus> {
         DEFINITIONS
             .iter()

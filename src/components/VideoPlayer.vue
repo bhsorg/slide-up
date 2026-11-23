@@ -3,15 +3,26 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   Play, Pause, SkipBack, SkipForward, Volume2, Volume1, VolumeX, Maximize, Minimize,
   Captions, Shuffle, Repeat, Repeat1,
-  PictureInPicture2, Check, Settings, ChevronDown, ChevronLeft, ChevronRight, FolderOpen, StepForward, Camera, X, Sparkles,
+  PictureInPicture2, Check, Settings, ChevronDown, ChevronLeft, ChevronRight, FolderOpen, StepForward, Camera, X, Sparkles, WandSparkles, Tv, Film, ListMusic,
 } from "@lucide/vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "../services/tauri";
 import { usePlayerStore } from "../stores/player";
+import { useLibraryStore } from "../stores/library";
+import { useSettingsStore } from "../stores/settings";
 import { useToast } from "../composables/useToast";
+import type { MediaItem } from "../types/media";
 import type { MediaTrack } from "../types/player";
 
+const props = withDefaults(defineProps<{ queueOpen?: boolean }>(), {
+  queueOpen: false,
+});
+const emit = defineEmits<{ togglePlaylist: [] }>();
+
 const player = usePlayerStore();
+const library = useLibraryStore();
+const settings = useSettingsStore();
 const toast = useToast();
 
 const surface = ref<HTMLElement | null>(null);
@@ -29,14 +40,41 @@ let syncAttempts = 0;
 type ActiveMenu = "speed" | "settings" | null;
 const activeMenu = ref<ActiveMenu>(null);
 
-type SettingsSection = "root" | "speed" | "aspect" | "subtitles" | "audio" | "tools";
+type SettingsSection = "root" | "speed" | "quality" | "aspect" | "subtitles" | "audio" | "filters" | "tools";
 const settingsSection = ref<SettingsSection>("root");
 
 // Right-click context menu state
 const showContextMenu = ref(false);
 const contextMenuPos = ref({ x: 0, y: 0 });
 
-const isMenuOpen = computed(() => activeMenu.value !== null || showContextMenu.value);
+const showVolumePopup = ref(false);
+let volumeCloseTimer: number | undefined;
+
+function openVolumePopup() {
+  if (volumeCloseTimer) {
+    window.clearTimeout(volumeCloseTimer);
+    volumeCloseTimer = undefined;
+  }
+  showVolumePopup.value = true;
+  wake();
+}
+
+function scheduleCloseVolumePopup() {
+  volumeCloseTimer = window.setTimeout(() => {
+    showVolumePopup.value = false;
+  }, 250);
+}
+
+function toggleVolumePopup() {
+  if (volumeCloseTimer) {
+    window.clearTimeout(volumeCloseTimer);
+    volumeCloseTimer = undefined;
+  }
+  showVolumePopup.value = !showVolumePopup.value;
+  wake();
+}
+
+const isMenuOpen = computed(() => activeMenu.value !== null || showContextMenu.value || showVolumePopup.value);
 
 function wake() {
   controlsVisible.value = true;
@@ -78,6 +116,7 @@ function closeMenus() {
   activeMenu.value = null;
   settingsSection.value = "root";
   showContextMenu.value = false;
+  showVolumePopup.value = false;
   wake();
 }
 
@@ -90,11 +129,15 @@ function onVideoClick() {
     return;
   }
 
-  // Handle single-click toggle play/pause vs double-click toggle fullscreen
+  // Handle single-click toggle play/pause vs double-click toggle fullscreen / exit pip
   if (clickTimer) {
     window.clearTimeout(clickTimer);
     clickTimer = undefined;
-    toggleFullscreen();
+    if (player.isPip) {
+      void player.togglePip();
+    } else {
+      toggleFullscreen();
+    }
   } else {
     clickTimer = window.setTimeout(() => {
       clickTimer = undefined;
@@ -138,9 +181,14 @@ function closeContextMenu() {
 }
 
 function handleGlobalClick(e: MouseEvent) {
-  if (showContextMenu.value || activeMenu.value !== null) {
+  if (showContextMenu.value || activeMenu.value !== null || showVolumePopup.value) {
     const target = e.target as HTMLElement | null;
-    if (target?.closest(".yt-context-menu") || target?.closest(".yt-popover")) {
+    if (
+      target?.closest(".yt-context-menu") ||
+      target?.closest(".yt-popover") ||
+      target?.closest(".video-volume-popover-trigger") ||
+      target?.closest(".volume-floating-panel")
+    ) {
       return;
     }
     closeMenus();
@@ -148,6 +196,19 @@ function handleGlobalClick(e: MouseEvent) {
 }
 
 const current = computed(() => player.state.current);
+
+const videoThumbnailUrl = computed(() => {
+  if (current.value?.thumbnailPath) {
+    return library.thumbnailUrl(current.value.thumbnailPath);
+  }
+  if (current.value?.id) {
+    const item = library.byId(current.value.id);
+    if (item?.thumbnailPath) {
+      return library.thumbnailUrl(item.thumbnailPath);
+    }
+  }
+  return null;
+});
 
 const videoFormat = computed(() => {
   if (!current.value?.path) return "MP4";
@@ -179,6 +240,123 @@ const currentSpeedLabel = computed(() =>
 const currentAspectLabel = computed(
   () => aspectOptionList.find((opt) => opt.value === aspect.value)?.label ?? "Fit Screen (Auto)",
 );
+
+interface HlsVariant {
+  name: string;
+  resolution: string;
+  bandwidth: number;
+  url: string;
+}
+
+const hlsVariants = ref<HlsVariant[]>([]);
+const currentMasterUrl = ref<string>("");
+const activeHlsVariantUrl = ref<string | null>(null);
+
+async function loadHlsVariants(url: string) {
+  if (!url || (!url.includes(".m3u8") && !url.includes("m3u"))) {
+    hlsVariants.value = [];
+    currentMasterUrl.value = "";
+    activeHlsVariantUrl.value = null;
+    return;
+  }
+  if (hlsVariants.value.some((v) => v.url === url)) {
+    activeHlsVariantUrl.value = url;
+    return;
+  }
+  try {
+    const res = await fetch(url);
+    const text = await res.text();
+    if (!text.includes("#EXT-X-STREAM-INF")) return;
+    currentMasterUrl.value = url;
+    activeHlsVariantUrl.value = null;
+    const lines = text.split(/\r?\n/);
+    const parsed: HlsVariant[] = [];
+    let currentInf = "";
+    for (const line of lines) {
+      if (line.startsWith("#EXT-X-STREAM-INF:")) {
+        currentInf = line;
+      } else if (currentInf && line.trim() && !line.startsWith("#")) {
+        const resMatch = currentInf.match(/RESOLUTION=(\d+x\d+)/i);
+        const bwMatch = currentInf.match(/BANDWIDTH=(\d+)/i);
+        const resolution = resMatch ? resMatch[1] : "";
+        const h = resolution ? resolution.split("x")[1] : "";
+        const bw = bwMatch ? parseInt(bwMatch[1], 10) : 0;
+        const bwStr = bw >= 1000000 ? `${(bw / 1000000).toFixed(1)} Mbps` : bw > 0 ? `${Math.round(bw / 1000)} kbps` : "";
+        const name = h ? `${h}p${bwStr ? ` (${bwStr})` : ""}` : bwStr || "Stream";
+
+        let fullUrl = line.trim();
+        if (!/^https?:\/\//i.test(fullUrl)) {
+          const base = url.substring(0, url.lastIndexOf("/") + 1);
+          fullUrl = new URL(fullUrl, base).href;
+        }
+
+        parsed.push({
+          name,
+          resolution,
+          bandwidth: bw,
+          url: fullUrl,
+        });
+        currentInf = "";
+      }
+    }
+    parsed.sort((a, b) => b.bandwidth - a.bandwidth);
+    hlsVariants.value = parsed;
+  } catch {
+    // Network or CORS fallback
+  }
+}
+
+async function selectHlsVariant(variant: HlsVariant | null) {
+  const target = variant ? variant.url : currentMasterUrl.value;
+  if (!target || !current.value) return;
+  activeHlsVariantUrl.value = variant ? variant.url : null;
+  const pos = player.state.positionMs;
+  const item: MediaItem = {
+    id: current.value.id,
+    path: target,
+    kind: "video",
+    title: current.value.title,
+    artist: current.value.artist,
+    album: current.value.album,
+    durationMs: current.value.durationMs,
+    codec: variant?.name ?? null,
+    width: variant?.resolution ? parseInt(variant.resolution.split("x")[0], 10) : null,
+    height: variant?.resolution ? parseInt(variant.resolution.split("x")[1], 10) : null,
+    sizeBytes: 0,
+    thumbnailPath: current.value.thumbnailPath,
+    favorite: false,
+    playCount: 0,
+    lastPlayedAt: Date.now(),
+    addedAt: Date.now(),
+  };
+  await player.play(item);
+  if (pos > 1000) {
+    window.setTimeout(() => void player.seek(pos).catch(() => {}), 500);
+  }
+}
+
+const currentQualityLabel = computed(() => {
+  if (hlsVariants.value.length > 0) {
+    if (activeHlsVariantUrl.value) {
+      const found = hlsVariants.value.find((v) => v.url === activeHlsVariantUrl.value);
+      if (found) return found.name;
+    }
+    if (player.state.videoHeight) {
+      return `Auto (${resolutionBadge.value})`;
+    }
+    return "Auto";
+  }
+  if (player.state.activeVideoTrack === -1) {
+    if (player.state.videoHeight) {
+      return `Auto (${resolutionBadge.value})`;
+    }
+    return "Auto";
+  }
+  const vid = player.state.videoTracks.find((track) => track.id === player.state.activeVideoTrack);
+  if (vid) return vid.name;
+  if (player.state.videoHeight) return `${player.state.videoHeight}p`;
+  return "Auto";
+});
 const currentSubtitleLabel = computed(() => {
   if (player.state.activeSubtitleTrack === -1) return "Off";
   const sub = player.state.subtitleTracks.find((track) => track.id === player.state.activeSubtitleTrack);
@@ -192,20 +370,24 @@ const currentAudioLabel = computed(() => {
 
 const settingsTitle = computed(() => {
   switch (settingsSection.value) {
+    case "quality": return "Quality";
     case "speed": return "Speed";
     case "aspect": return "Aspect Ratio";
     case "subtitles": return "Subtitles";
     case "audio": return "Audio Tracks";
+    case "filters": return "Filters";
     case "tools": return "Tools";
     default: return "Settings";
   }
 });
 
 const settingsRows = computed(() => [
+  { key: "quality" as const, label: "Quality", value: currentQualityLabel.value },
   { key: "speed" as const, label: "Speed", value: currentSpeedLabel.value },
   { key: "aspect" as const, label: "Aspect ratio", value: currentAspectLabel.value },
-  { key: "subtitles" as const, label: "Subtitles", value: currentSubtitleLabel.value },
   { key: "audio" as const, label: "Audio tracks", value: currentAudioLabel.value },
+  { key: "subtitles" as const, label: "Subtitles", value: currentSubtitleLabel.value },
+  { key: "filters" as const, label: "Filters", value: "Brightness & more" },
   { key: "tools" as const, label: "Tools", value: "Frame & capture" },
 ]);
 
@@ -215,6 +397,32 @@ function openSettingsSection(section: SettingsSection) {
 
 function backSettings() {
   settingsSection.value = "root";
+}
+
+type FilterKey = "videoBrightness" | "videoContrast" | "videoSaturation" | "videoGamma";
+
+async function changeFilter(key: FilterKey, value: number) {
+  void api.setVideoFilter(key.slice(5).toLowerCase(), value).catch(() => { });
+  try {
+    await settings.patch({ [key]: value } as Partial<typeof settings.settings>);
+  } catch (error) {
+    toast.error(String(error), "Could not save video filter");
+  }
+}
+
+async function applyAutoFilters() {
+  try {
+    const filters = await api.autoVideoFilters();
+    await settings.patch({
+      videoBrightness: filters.brightness,
+      videoContrast: filters.contrast,
+      videoSaturation: filters.saturation,
+      videoGamma: filters.gamma,
+    });
+    toast.success("Applied optimal video filters.");
+  } catch (error) {
+    toast.error(String(error), "Could not analyze the video frame");
+  }
 }
 
 const volumeIcon = computed(() => {
@@ -303,11 +511,11 @@ function onVolumeWheel(event: WheelEvent) {
 }
 
 const pipSizes = [
-  { width: 440, height: 290, label: "S" },
-  { width: 560, height: 360, label: "M" },
-  { width: 720, height: 460, label: "L" },
+  { width: 320, height: 185, label: "S" },
+  { width: 480, height: 275, label: "M" },
+  { width: 640, height: 365, label: "L" },
 ];
-const currentPipSizeIndex = ref(1);
+const currentPipSizeIndex = ref(0);
 
 async function cyclePipSize() {
   currentPipSizeIndex.value = (currentPipSizeIndex.value + 1) % pipSizes.length;
@@ -323,21 +531,26 @@ async function cyclePipSize() {
   }
 }
 
-async function syncRect() {
-  const element = surface.value;
-  if (!element) return;
-  const rect = element.getBoundingClientRect();
-  if (rect.width < 2 || rect.height < 2) return;
-  try {
-    await api.syncVideoRect(
-      Math.round(rect.left),
-      Math.round(rect.top),
-      Math.round(rect.width),
-      Math.round(rect.height),
-    );
-  } catch {
-    // Surface may not exist yet; retry during the sync window.
-  }
+let syncRaf = 0;
+function syncRect() {
+  if (syncRaf) cancelAnimationFrame(syncRaf);
+  syncRaf = requestAnimationFrame(async () => {
+    syncRaf = 0;
+    const element = surface.value;
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return;
+    try {
+      await api.syncVideoRect(
+        Math.round(rect.left),
+        Math.round(rect.top),
+        Math.round(rect.width),
+        Math.round(rect.height),
+      );
+    } catch {
+      // Surface may not exist yet
+    }
+  });
 }
 
 function selectSpeed(s: number) {
@@ -348,6 +561,10 @@ function selectSpeed(s: number) {
 function selectAspect(val: string) {
   aspect.value = val;
   void player.setAspectRatio(val);
+}
+
+function selectVideoTrack(id: number) {
+  void player.setVideoTrack(id);
 }
 
 function selectAudioTrack(id: number) {
@@ -393,6 +610,23 @@ async function toggleAiEnhance() {
   }
 }
 
+const upscaling = ref(false);
+
+async function upscaleCurrentVideo() {
+  const path = current.value?.path;
+  if (!path || upscaling.value) return;
+  upscaling.value = true;
+  try {
+    const output = await player.upscaleVideo(path);
+    toast.success(`Upscaled video saved to ${output}`, "Real-ESRGAN");
+  } catch (error) {
+    toast.error(String(error), "Real-ESRGAN upscale failed");
+  } finally {
+    upscaling.value = false;
+    wake();
+  }
+}
+
 function toggleFullscreen() {
   void player.setFullscreen(!player.state.fullscreen);
 }
@@ -415,6 +649,18 @@ watch(() => current.value?.id, () => {
   syncAttempts = 0;
 });
 
+watch(
+  () => current.value?.path,
+  (newPath) => {
+    if (newPath) {
+      void loadHlsVariants(newPath);
+    } else {
+      hlsVariants.value = [];
+    }
+  },
+  { immediate: true },
+);
+
 watch(() => [player.state.fullscreen, player.isPip] as const, () => {
   void nextTick(syncRect);
   window.setTimeout(syncRect, 60);
@@ -426,6 +672,8 @@ watch(() => player.state.status, () => {
 });
 
 onMounted(() => {
+  void getCurrentWebview().setBackgroundColor([0, 0, 0, 0]).catch(() => undefined);
+  void api.setVideoLayer(false).catch(() => undefined);
   void api.setSurfaceVisible(true).catch(() => undefined);
   void player.refreshAiEnhanceAvailability();
   void nextTick(syncRect);
@@ -448,9 +696,11 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (syncRaf) cancelAnimationFrame(syncRaf);
   if (idleTimer) window.clearTimeout(idleTimer);
   if (clickTimer) window.clearTimeout(clickTimer);
   if (syncTimer) window.clearInterval(syncTimer);
+  if (volumeCloseTimer) window.clearTimeout(volumeCloseTimer);
   resizeObserver?.disconnect();
   window.removeEventListener("resize", syncRect);
   window.removeEventListener("keydown", handleKeyDown);
@@ -477,7 +727,7 @@ onBeforeUnmount(() => {
     <!-- Center is transparent (rgba(0,0,0,0.001)), top and bottom are dimmed around controls -->
     <div
       class="absolute inset-0 z-20 flex flex-col justify-between select-none pointer-events-auto transition-[cursor] duration-150"
-      :class="!controlsVisible && !isMenuOpen && player.isPlaying && !player.isPip ? 'cursor-none' : 'cursor-default'"
+      :class="!controlsVisible && !isMenuOpen && player.isPlaying ? 'cursor-none' : 'cursor-default'"
       style="background-color: rgba(0, 0, 0, 0.001);"
       @mousemove="wake"
       @mouseenter="wake"
@@ -485,54 +735,98 @@ onBeforeUnmount(() => {
       @click="onVideoClick"
       @contextmenu.prevent.stop="onContextMenu"
     >
-      <!-- Top Dimmed Controls Bar (Fades out when idle, dimmed only behind controls) -->
-      <div
-        class="video-top-overlay transition-opacity duration-300"
-        :class="{
-          'opacity-100 pointer-events-auto': controlsVisible || isMenuOpen || !player.isPlaying || player.isPip,
-          'opacity-0 pointer-events-none': !controlsVisible && !isMenuOpen && player.isPlaying && !player.isPip
-        }"
-        @click.stop
-        @contextmenu.prevent.stop="onContextMenu"
-        @mouseenter="isInteractingWithControls = true; wake()"
-        @mouseleave="isInteractingWithControls = false; wake()"
-      >
-        <!-- PiP draggable header if in PiP mode -->
+      <!-- ================= Dedicated Custom Minimal PiP Mode ================= -->
+      <template v-if="player.isPip">
         <div
-          v-if="player.isPip"
-          data-tauri-drag-region
-          class="flex items-center justify-between w-full cursor-move"
-        >
-          <div data-tauri-drag-region class="flex items-center gap-2 min-w-0">
-            <span class="ref-badge">{{ resolutionBadge }}</span>
-            <span class="truncate font-semibold text-white text-[11px]">{{ current?.title ?? "Playing" }}</span>
+          class="pip-overlay absolute inset-0 flex flex-col justify-between p-2.5 transition-opacity duration-300 pointer-events-none"
+          :class="{
+  'opacity-100': controlsVisible || !player.isPlaying,
+  'opacity-0': !controlsVisible && player.isPlaying
+}"
+>
+          <!-- Top Bar: Drag Region + Compact Title & Minimal Window Actions -->
+          <div
+data-tauri-drag-region
+            class="pip-top-bar flex items-center justify-between w-full cursor-move rounded-lg px-2.5 py-1.5 bg-black/60 backdrop-blur-md border border-white/10 pointer-events-auto">
+            <div data-tauri-drag-region class="flex items-center gap-1.5 min-w-0 pr-2">
+              <span v-if="player.isLive" class="live-dot-badge scale-90 origin-left">LIVE</span>
+              <span class="truncate font-semibold text-white/95 text-[11px] select-none">
+                {{ current?.title ?? "Playing" }}
+              </span>
+            </div>
+
+            <div class="flex items-center gap-1 shrink-0" style="-webkit-app-region: no-drag;">
+              <button type="button" class="pip-btn text-[10px] font-bold px-1.5" title="Change PiP size"
+                @click.stop="cyclePipSize">
+                {{ pipSizes[currentPipSizeIndex].label }}
+              </button>
+              <button type="button" class="pip-btn" title="Expand to Full Player" @click.stop="player.togglePip()">
+                <Maximize :size="12" />
+              </button>
+              <button type="button" class="pip-btn hover:text-red-400" title="Exit PiP"
+                @click.stop="player.togglePip()">
+                <X :size="12" />
+              </button>
+            </div>
           </div>
 
-          <div class="flex items-center gap-1 shrink-0" style="-webkit-app-region: no-drag;">
-            <button
-              type="button"
-              class="ref-icon-btn px-1.5 text-[10px] font-bold"
-              title="Cycle window size"
-              @click.stop="cyclePipSize"
-            >
-              {{ pipSizes[currentPipSizeIndex].label }}
+          <!-- Center: Minimal Quick Transport Controls -->
+          <div data-tauri-drag-region
+            class="flex items-center justify-center gap-4 my-auto select-none cursor-move pointer-events-auto">
+            <button type="button" class="pip-circle-btn text-white/90 hover:text-white"
+              style="-webkit-app-region: no-drag;" title="Previous" @click.stop="player.previous()">
+              <SkipBack :size="14" fill="currentColor" />
             </button>
-            <button
-              type="button"
-              class="ref-icon-btn"
-              title="Exit PiP"
-              @click.stop="player.togglePip()"
-            >
-              <PictureInPicture2 :size="13" class="text-purple-400" />
+
+            <button type="button" class="pip-hero-btn" style="-webkit-app-region: no-drag;"
+              :title="player.isPlaying ? 'Pause' : 'Play'" @click.stop="player.togglePause()">
+              <Pause v-if="player.isPlaying" :size="18" fill="currentColor" />
+              <Play v-else :size="18" fill="currentColor" class="ml-0.5" />
             </button>
+
+            <button type="button" class="pip-circle-btn text-white/90 hover:text-white"
+              style="-webkit-app-region: no-drag;" title="Next" @click.stop="player.next()">
+              <SkipForward :size="14" fill="currentColor" />
+            </button>
+          </div>
+
+          <!-- Bottom: Sleek Thin Progress Bar with Timestamps -->
+          <div
+            class="pip-bottom-bar flex flex-col gap-1 w-full px-2 py-1.5 rounded-lg bg-black/55 backdrop-blur-md border border-white/10 pointer-events-auto"
+            style="-webkit-app-region: no-drag;" @click.stop>
+            <div
+              class="flex items-center justify-between text-[10px] font-semibold text-white/85 tabular-nums px-0.5 select-none">
+              <span>{{ formatVideoTime(player.state.positionMs, player.state.durationMs) }}</span>
+              <span>{{ formatVideoTime(player.state.durationMs, player.state.durationMs) }}</span>
+            </div>
+            <input class="pip-seek-bar w-full" type="range" min="0" :max="Math.max(player.state.durationMs, 1)"
+              :value="player.state.positionMs" :style="{ '--fill': `${player.progress}%` }" aria-label="Seek"
+              @input="player.seek(Number(($event.target as HTMLInputElement).value))" />
           </div>
         </div>
+      </template>
 
-        <!-- Standard / Fullscreen mode Top Controls -->
-        <template v-else>
-          <!-- Left: 4K / HD Badge & Title -->
+      <!-- ================= Standard / Fullscreen mode Controls (When NOT in PiP) ================= -->
+      <template v-else>
+        <!-- Top Dimmed Controls Bar (Fades out when idle, dimmed only behind controls) -->
+        <div class="video-top-overlay transition-opacity duration-300" :class="{
+          'opacity-100 pointer-events-auto': controlsVisible || isMenuOpen || !player.isPlaying,
+          'opacity-0 pointer-events-none': !controlsVisible && !isMenuOpen && player.isPlaying
+        }" @click.stop @contextmenu.prevent.stop="onContextMenu" @mouseenter="isInteractingWithControls = true; wake()"
+          @mouseleave="isInteractingWithControls = false; wake()">
+          <!-- Left: Thumbnail & Title -->
           <div class="flex items-center gap-2.5 min-w-0">
-            <span class="ref-badge">{{ resolutionBadge }}</span>
+            <!-- Channel Logo (IPTV) or Video File Thumbnail with TV/Film fallback -->
+            <div
+              class="relative h-7 w-7 shrink-0 overflow-hidden rounded-md bg-black/50 border border-white/20 shadow-sm flex items-center justify-center">
+              <img v-if="videoThumbnailUrl" :src="videoThumbnailUrl" :alt="current?.title ?? 'Thumbnail'"
+                class="h-full w-full object-cover z-1"
+                @error="($event.target as HTMLImageElement).style.display = 'none'" />
+              <Tv v-if="player.isLive || (current?.id && current.id < -1000)" :size="15"
+                class="text-purple-400 opacity-90" />
+              <Film v-else :size="13" class="text-white/60" />
+            </div>
+
             <div class="min-w-0">
               <span class="truncate text-[13px] font-semibold text-white block drop-shadow-md">
                 {{ current?.title ?? "Slide Up Video" }}
@@ -545,16 +839,15 @@ onBeforeUnmount(() => {
 
           <!-- Right: Floating Action Buttons [Speed, CC, Settings, PiP, Fullscreen] -->
           <div class="flex items-center gap-1.5 shrink-0">
-            <!-- Speed button in top bar -->
+            <!-- Playlist Toggle Button (Replaces duplicate Speed button) -->
             <button
               type="button"
-              class="ref-icon-btn px-2 w-auto text-[11px] font-semibold flex items-center gap-1"
-              :class="{ 'ref-icon-btn-active': activeMenu === 'speed' }"
-              title="Playback Speed"
-              @click.stop="toggleMenu('speed')"
+              class="ref-icon-btn"
+              :class="{ 'ref-icon-btn-active': props.queueOpen }"
+              :title="props.queueOpen ? 'Hide Playlist' : 'Show Playlist'"
+              @click.stop="emit('togglePlaylist')"
             >
-              <span>{{ player.state.speed }}x</span>
-              <ChevronDown :size="11" class="opacity-70" />
+              <ListMusic :size="15" />
             </button>
 
             <!-- CC Subtitles Toggle -->
@@ -578,6 +871,13 @@ onBeforeUnmount(() => {
               @click.stop="toggleAiEnhance"
             >
               <Sparkles :size="15" />
+            </button>
+
+            <!-- Real-ESRGAN offline upscale — only when the model is installed -->
+            <button v-if="player.realesrganAvailable" type="button" class="ref-icon-btn" :disabled="upscaling"
+              :title="upscaling ? 'Upscaling video…' : 'Upscale this video with Real-ESRGAN'"
+              @click.stop="upscaleCurrentVideo">
+              <WandSparkles :size="15" />
             </button>
 
             <!-- Settings Button -->
@@ -613,17 +913,50 @@ onBeforeUnmount(() => {
               <Maximize v-else :size="15" />
             </button>
           </div>
-        </template>
-      </div>
+        </div>
 
+
+
+
+
+ 
       <!-- Center Area: Transparent, lets clicks bubble to master overlay for pause/play -->
       <div
         class="flex-1 w-full flex items-center justify-center pointer-events-none"
-      >
-        <!-- Center play badge when paused -->
+>
+
+
+ 
         <Transition name="fade-scale">
+            <!-- Center loading / buffering indicator -->
+
+ 
           <div
-            v-if="!player.isPlaying && !player.isPip"
+              v-if="(player.state.status === 'loading' || (player.isLive && !player.isPlaying && player.state.positionMs === 0)) && !player.isPip"
+              class="flex flex-col items-center gap-3 px-6 py-4 rounded-2xl bg-black/75 backdrop-blur-md border border-white/15 shadow-2xl pointer-events-none">
+              <div class="relative flex items-center justify-center">
+                <div class="h-11 w-11 rounded-full border-[3px] border-purple-500/30 border-t-purple-400 animate-spin">
+                </div>
+                <Tv v-if="player.isLive" :size="18" class="text-purple-400 absolute" />
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="h-2 w-2 rounded-full bg-purple-400 animate-pulse"></span>
+                <span class="text-xs font-semibold text-white tracking-wide">
+                  {{ player.isLive ? 'Connecting to live stream…' : 'Buffering stream…' }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Center error message if stream fails -->
+            <div v-else-if="player.state.status === 'error' && !player.isPip"
+              class="flex flex-col items-center gap-2 px-5 py-3.5 rounded-2xl bg-black/80 backdrop-blur-md border border-red-500/40 text-red-200 shadow-2xl pointer-events-none max-w-sm text-center">
+              <span class="text-xs font-bold text-red-400">Stream Playback Failed</span>
+              <span class="text-[11px] text-white/80">{{ player.state.error || "Unable to play stream" }}</span>
+            </div>
+
+            <!-- Center play badge when paused -->
+            <div v-else-if="!player.isPlaying && !player.isPip"
+ 
             class="h-16 w-16 rounded-full bg-black/60 backdrop-blur-md border border-white/20 flex items-center justify-center shadow-2xl transition-transform hover:scale-110 pointer-events-none"
           >
             <Play :size="28" fill="white" class="text-white ml-1" />
@@ -635,8 +968,8 @@ onBeforeUnmount(() => {
       <div
         class="video-bottom-overlay transition-opacity duration-300"
         :class="{
-          'opacity-100 pointer-events-auto': controlsVisible || isMenuOpen || !player.isPlaying || player.isPip,
-          'opacity-0 pointer-events-none': !controlsVisible && !isMenuOpen && player.isPlaying && !player.isPip
+  'opacity-100 pointer-events-auto': controlsVisible || isMenuOpen || !player.isPlaying,
+  'opacity-0 pointer-events-none': !controlsVisible && !isMenuOpen && player.isPlaying
         }"
         @click.stop
         @contextmenu.prevent.stop="onContextMenu"
@@ -685,42 +1018,61 @@ onBeforeUnmount(() => {
             />
           </div>
 
-          <span class="text-[12px] font-semibold tabular-nums text-white/90 shrink-0 select-none drop-shadow">
-            {{ formatVideoTime(player.state.durationMs, player.state.durationMs) }}
-          </span>
-        </div>
+            <span v-if="player.isLive" class="live-dot-badge">
+              <span class="live-dot"></span>
+              LIVE
+            </span>
+            <span v-else class="text-[12px] font-semibold tabular-nums text-white/90 shrink-0 select-none drop-shadow">
 
-        <!-- Row 2: Controls (Left Volume | Center Transport & Big Purple Play | Right Speed, Quality, Settings) -->
-        <div class="flex items-center justify-between w-full mt-2.5 select-none">
-          <!-- Left: Volume Icon + Slider + Divider -->
-          <div class="flex items-center gap-2" @wheel.prevent="onVolumeWheel">
+ 
+            {{ formatVideoTime(player.state.durationMs, player.state.durationMs) }}
+            </span>
+
+
+
+            <!-- Volume with Vertical Slider Popover right next to seekbar -->
+            <div class="relative flex items-center video-volume-popover-trigger shrink-0" @mouseenter="openVolumePopup"
+              @mouseleave="scheduleCloseVolumePopup">
+
+ 
             <button
               type="button"
               class="ref-tool-btn"
-              :title="player.state.muted ? 'Unmute' : 'Mute'"
-              @click.stop="player.toggleMute()"
+:title="player.state.muted ? 'Unmute' : 'Volume'"
+                @click.stop="toggleVolumePopup"
             >
               <component :is="volumeIcon" :size="19" class="text-white drop-shadow" />
             </button>
 
-            <input
-              class="ref-vol-bar"
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              :value="player.state.muted ? 0 : player.state.volume"
-              :style="{ '--fill': `${volumePercent}%` }"
-              aria-label="Volume"
-              @input="player.setVolume(Number(($event.target as HTMLInputElement).value))"
-            />
+              <!-- Vertical Slider Popup -->
+              <div v-if="showVolumePopup" class="volume-floating-panel" @mouseenter="openVolumePopup"
+                @mouseleave="scheduleCloseVolumePopup" @wheel.prevent.stop="onVolumeWheel" @click.stop>
+                <span class="volume-percentage">{{ volumePercent }}%</span>
+                <div class="volume-slider-wrapper">
 
-            <!-- Vertical Separator Line -->
-            <div class="h-4 w-px bg-white/25 mx-1 hidden sm:block" />
+                 <input
+class="su-range volume-vertical-range" type="range" min="0" max="1" step="0.01"
+                    :value="player.state.muted ? 0 : player.state.volume" :style="{ '--fill': `${volumePercent}%` }"
+                    aria-label="Volume" @input="player.setVolume(Number(($event.target as HTMLInputElement).value))" />
+
+                </div>
+
+             </div>
+            </div>
           </div>
 
+          <!-- Row 2: Controls (Left Spacer | Center Transport & Big Purple Play | Right Speed, Quality, Settings) -->
+          <div class="flex items-center justify-between w-full mt-1.5 select-none">
+            <!-- Left spacer to keep center transport buttons centered -->
+            <div class="flex-1 flex items-center justify-start gap-2" />
+
+
+
+ 
           <!-- Center: Shuffle, Prev, Big Purple Play/Pause, Next, Repeat -->
-          <div class="flex items-center gap-3 sm:gap-4">
+            <div class="flex items-center gap-3 sm:gap-4 justify-center">
+
+ 
             <!-- Shuffle -->
             <button
               v-if="!player.isPip"
@@ -779,7 +1131,9 @@ onBeforeUnmount(() => {
           </div>
 
           <!-- Right: 1.0x v Speed, Purple HD/4K Badge, Settings Gear -->
-          <div class="flex items-center gap-2">
+            <div class="flex-1 flex items-center justify-end gap-2">
+
+ 
             <!-- Speed selector: 1.0x v -->
             <button
               v-if="!player.isPip"
@@ -812,13 +1166,14 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      </template>
     </div>
 
     <!-- 3. YouTube-style Floating Settings Popover (Above Settings Gear) -->
     <Transition name="fade-scale">
       <div
         v-if="activeMenu === 'settings'"
-        class="yt-popover absolute bottom-20 right-6 w-64 z-40 pointer-events-auto"
+        class="yt-popover absolute bottom-16 right-6 w-64 z-40 pointer-events-auto"
         @click.stop
       >
         <div class="yt-popover-header flex items-center justify-between">
@@ -891,6 +1246,60 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <!-- Video Quality Selection -->
+        <div v-else-if="settingsSection === 'quality'" class="p-2">
+          <div
+            class="flex items-center justify-between text-[10px] font-bold text-white/50 uppercase tracking-wider mb-1">
+            <span>Video Quality</span>
+            <span v-if="player.state.videoHeight" class="text-purple text-[10px]">{{ player.state.videoWidth }}x{{
+              player.state.videoHeight }}</span>
+          </div>
+          <div class="flex flex-col gap-0.5 max-h-48 overflow-y-auto pr-1">
+            <!-- HLS Adaptive Multi-Quality Variants -->
+            <template v-if="hlsVariants.length > 0">
+              <button
+                type="button"
+                class="yt-list-item"
+                :class="{ active: activeHlsVariantUrl === null }"
+                @click="selectHlsVariant(null)"
+              >
+                <span class="truncate">Auto {{ player.state.videoHeight ? `(${resolutionBadge})` : '' }}</span>
+                <Check v-if="activeHlsVariantUrl === null" :size="12" class="text-[#8b5cf6]" />
+              </button>
+              <button
+                v-for="v in hlsVariants"
+                :key="v.url"
+                type="button"
+                class="yt-list-item"
+                :class="{ active: activeHlsVariantUrl === v.url }"
+                @click="selectHlsVariant(v)"
+              >
+                <span class="truncate">{{ v.name }}</span>
+                <Check v-if="activeHlsVariantUrl === v.url" :size="12" class="text-[#8b5cf6]" />
+              </button>
+            </template>
+
+            <!-- Standard Video Tracks / Renditions -->
+            <template v-else>
+              <!-- Auto option -->
+              <button type="button" class="yt-list-item" :class="{ active: player.state.activeVideoTrack === -1 }"
+                @click="selectVideoTrack(-1)">
+                <span class="truncate">Auto {{ player.state.videoHeight ? `(${resolutionBadge})` : '' }}</span>
+                <Check v-if="player.state.activeVideoTrack === -1" :size="12" class="text-[#8b5cf6]" />
+              </button>
+
+              <button v-for="vid in player.state.videoTracks" :key="vid.id" type="button" class="yt-list-item"
+                :class="{ active: player.state.activeVideoTrack === vid.id }" @click="selectVideoTrack(vid.id)">
+                <span class="truncate">{{ vid.name || `Quality ${vid.id}` }}</span>
+                <Check v-if="player.state.activeVideoTrack === vid.id" :size="12" class="text-[#8b5cf6]" />
+              </button>
+              <div v-if="!player.state.videoTracks.length" class="text-[11px] text-white/50 py-2 text-center">
+                Original Quality ({{ player.state.videoHeight ? `${player.state.videoHeight}p` : 'Default' }})
+              </div>
+            </template>
+          </div>
+        </div>
+
         <!-- Subtitles -->
         <div v-else-if="settingsSection === 'subtitles'" class="p-2">
           <div class="flex items-center justify-between text-[10px] font-bold text-white/50 uppercase tracking-wider mb-1">
@@ -953,6 +1362,32 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <!-- Filters -->
+        <div v-else-if="settingsSection === 'filters'" class="flex flex-col gap-2 p-2.5">
+          <button type="button"
+            class="flex w-full items-center justify-center gap-1.5 rounded-md bg-[#8b5cf6]/20 px-2 py-1.5 text-[10.5px] font-semibold text-[#c4b5fd] hover:bg-[#8b5cf6]/30 cursor-pointer"
+            @click="applyAutoFilters">
+            <WandSparkles :size="12" /> Auto optimize
+          </button>
+          <div v-for="filter in ([
+            { key: 'videoBrightness' as const, label: 'Brightness' },
+            { key: 'videoContrast' as const, label: 'Contrast' },
+            { key: 'videoSaturation' as const, label: 'Saturation' },
+            { key: 'videoGamma' as const, label: 'Gamma' },
+          ])" :key="filter.key" class="flex flex-col gap-1">
+            <div class="flex items-center justify-between text-[10px] text-white/60">
+              <span>{{ filter.label }}</span>
+              <span class="tabular-nums text-white/85">{{ settings.settings[filter.key] }}</span>
+            </div>
+            <input type="range" min="-100" max="100" step="1" class="w-full accent-[#8b5cf6] cursor-pointer"
+              :value="settings.settings[filter.key]"
+              @input="changeFilter(filter.key, Number(($event.target as HTMLInputElement).value))" />
+          </div>
+          <button type="button" class="text-center text-[9.5px] text-white/40 hover:text-white/70 cursor-pointer"
+            @click="settings.patch({ videoBrightness: 0, videoContrast: 0, videoSaturation: 0, videoGamma: 0 })">Reset
+            filters</button>
+        </div>
+
         <!-- Tools -->
         <div v-else-if="settingsSection === 'tools'" class="flex items-center justify-between p-2 text-[10.5px]">
           <button
@@ -973,11 +1408,11 @@ onBeforeUnmount(() => {
       </div>
     </Transition>
 
-    <!-- 4. YouTube-style Floating Speed Popover (Above Speed Button) -->
+    <!-- 4. YouTube-style Floating Speed Popover (Above Bottom Speed Button) -->
     <Transition name="fade-scale">
       <div
         v-if="activeMenu === 'speed'"
-        class="yt-popover absolute bottom-20 right-28 w-36 z-40 pointer-events-auto"
+        class="yt-popover absolute bottom-16 right-20 w-36 z-40 pointer-events-auto"
         @click.stop
       >
         <div class="yt-popover-header flex items-center justify-between">
@@ -1078,6 +1513,22 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <!-- Quality / Video Tracks -->
+        <div v-if="player.state.videoTracks.length > 0" class="ctx-group">
+          <div class="ctx-label">Quality</div>
+          <div class="flex items-center gap-1 px-2 pb-1.5 pt-0.5 overflow-x-auto">
+            <button type="button" class="ctx-pill" :class="{ active: player.state.activeVideoTrack === -1 }"
+              @click="selectVideoTrack(-1); closeContextMenu()">
+              Auto
+            </button>
+            <button v-for="vid in player.state.videoTracks" :key="vid.id" type="button" class="ctx-pill"
+              :class="{ active: player.state.activeVideoTrack === vid.id }"
+              @click="selectVideoTrack(vid.id); closeContextMenu()">
+              {{ vid.name || `Quality ${vid.id}` }}
+            </button>
+          </div>
+        </div>
+
         <div class="ctx-divider" />
 
         <!-- Load Subtitles -->
@@ -1108,6 +1559,15 @@ onBeforeUnmount(() => {
             <span>{{ player.aiEnhance ? 'Disable AI Enhance' : 'Enable AI Enhance' }}</span>
           </div>
           <Check v-if="player.aiEnhance" :size="14" class="text-[#a78bfa]" />
+        </button>
+
+        <!-- Real-ESRGAN offline upscale -->
+        <button v-if="player.realesrganAvailable" type="button" class="ctx-item" :disabled="upscaling"
+          @click="upscaleCurrentVideo(); closeContextMenu()">
+          <div class="flex items-center gap-2.5">
+            <WandSparkles :size="14" />
+            <span>{{ upscaling ? 'Upscaling…' : 'Upscale Video (Real-ESRGAN)' }}</span>
+          </div>
         </button>
 
         <div class="ctx-divider" />
@@ -1163,7 +1623,7 @@ onBeforeUnmount(() => {
 .video-yt-bottom {
   display: flex;
   flex-direction: column;
-  padding: 2.5rem 1.5rem 1.25rem;
+  padding: 1.75rem 1.25rem 0.65rem;
   background: linear-gradient(
     to top,
     rgba(0, 0, 0, 0.92) 0%,
@@ -1260,7 +1720,65 @@ onBeforeUnmount(() => {
   transform: scale(1.3);
 }
 
-/* Reference Volume Bar */
+/* Reference Volume Bar & Vertical Popover */
+.video-volume-popover-trigger {
+  position: relative;
+}
+
+.volume-floating-panel {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  width: 42px;
+  border-radius: var(--radius-md, 12px);
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
+  background: var(--bg-panel, rgba(14, 20, 42, 0.96));
+  padding: 0.55rem 0.35rem 0.4rem;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(16px);
+}
+
+.volume-percentage {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  user-select: none;
+  line-height: 1;
+}
+
+.volume-slider-wrapper {
+  height: 96px;
+  width: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.volume-vertical-range {
+  width: 96px !important;
+  height: 16px;
+  transform: rotate(-90deg);
+  transform-origin: center center;
+  cursor: pointer;
+}
+
+.volume-floating-panel::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 16px;
+}
 .ref-vol-bar {
   -webkit-appearance: none;
   appearance: none;
@@ -1298,8 +1816,8 @@ onBeforeUnmount(() => {
 /* Tool Buttons (Shuffle, Prev, Next, Repeat, Mute) */
 .ref-tool-btn {
   display: flex;
-  height: 2.15rem;
-  width: 2.15rem;
+  height: 1.95rem;
+  width: 1.95rem;
   align-items: center;
   justify-content: center;
   border-radius: 0.5rem;
@@ -1321,14 +1839,14 @@ onBeforeUnmount(() => {
 /* Big Hero Play/Pause Button in Center */
 .ref-hero-play-btn {
   display: flex;
-  height: 2.85rem;
-  width: 2.85rem;
+  height: 2.45rem;
+  width: 2.45rem;
   align-items: center;
   justify-content: center;
   border-radius: 9999px;
   background: #8b5cf6;
   color: #ffffff;
-  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.55);
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.55);
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -1389,6 +1907,10 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+.yt-popover-transparent {
+  background: rgba(14, 20, 42, 0.5);
+  backdrop-filter: blur(8px);
+}
 .yt-popover-header {
   padding: 0.5rem 0.75rem;
   background: rgba(255, 255, 255, 0.05);
@@ -1538,5 +2060,112 @@ onBeforeUnmount(() => {
 .fade-scale-leave-to {
   opacity: 0;
   transform: translateY(6px) scale(0.96);
+}
+/* Custom PiP Player Minimal Overlay Styles */
+.pip-overlay {
+  background: radial-gradient(circle at center,
+      rgba(0, 0, 0, 0.08) 0%,
+      rgba(0, 0, 0, 0.55) 100%);
+}
+
+.pip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.45rem;
+  min-width: 1.45rem;
+  padding: 0 0.35rem;
+  border-radius: 0.375rem;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pip-btn:hover {
+  background: rgba(255, 255, 255, 0.28);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.pip-circle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 2rem;
+  width: 2rem;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.pip-circle-btn:hover {
+  transform: scale(1.12);
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.pip-hero-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.65rem;
+  width: 2.65rem;
+  border-radius: 9999px;
+  background: #8b5cf6;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.55);
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.pip-hero-btn:hover {
+  transform: scale(1.08);
+  background: #7c3aed;
+}
+
+.pip-seek-bar {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pip-seek-bar::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 9999px;
+  background: linear-gradient(to right,
+      #8b5cf6 0%,
+      #8b5cf6 var(--fill, 0%),
+      rgba(255, 255, 255, 0.25) var(--fill, 0%),
+      rgba(255, 255, 255, 0.25) 100%);
+  transition: height 0.15s ease;
+}
+
+.pip-seek-bar:hover::-webkit-slider-runnable-track {
+  height: 5px;
+}
+
+.pip-seek-bar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  margin-top: -3.5px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #8b5cf6;
+  box-shadow: 0 0 6px rgba(139, 92, 246, 0.8);
+  transition: transform 0.15s ease;
+}
+
+.pip-seek-bar:hover::-webkit-slider-thumb {
+  transform: scale(1.25);
 }
 </style>

@@ -1,24 +1,72 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Search, Sun, Moon, Minus, Square, X, X as ClearIcon } from "@lucide/vue";
+import { Search, Sun, Moon, Minus, Square, X, X as ClearIcon, Settings, RefreshCw, Info } from "@lucide/vue";
 import { useLibraryStore } from "../stores/library";
+import { usePlayerStore } from "../stores/player";
 import { useSettingsStore } from "../stores/settings";
 import { useToast } from "../composables/useToast";
+import type { ViewId } from "../types/settings";
+
+const emit = defineEmits<{ navigate: [view: ViewId] }>();
 
 const library = useLibraryStore();
+const player = usePlayerStore();
 const settings = useSettingsStore();
 const toast = useToast();
 
 const isLight = computed(() => settings.theme === "light");
 
+const menuOpen = ref(false);
+const menuRef = ref<HTMLElement | null>(null);
+
+function onWindowClick(e: MouseEvent) {
+  if (menuRef.value && !menuRef.value.contains(e.target as Node)) {
+    menuOpen.value = false;
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("click", onWindowClick);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("click", onWindowClick);
+});
+
+function openSettings(tab: string = "appearance") {
+  menuOpen.value = false;
+  settings.activeTab = tab;
+  emit("navigate", "settings");
+}
+
+function openAbout() {
+  menuOpen.value = false;
+  emit("navigate", "about");
+}
+
+async function checkUpdate() {
+  menuOpen.value = false;
+  toast.info("Checking for updates...", "Update");
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  toast.success("You are running the latest version of Slide Up (v1.0.0).", "Up to date");
+}
+
 async function windowAction(action: "minimize" | "maximize" | "close") {
   try {
     const win = getCurrentWindow();
-    if (action === "minimize") await win.minimize();
-    else if (action === "maximize") await win.toggleMaximize();
-    else if (settings.settings.minimizeToTray) await win.hide();
-    else await win.close();
+    if (action === "minimize") {
+      await win.minimize();
+    } else if (action === "maximize") {
+      await win.toggleMaximize();
+    } else if (settings.settings.taskbarControls && player.isPlaying && !player.isVideo) {
+      await win.minimize();
+      toast.info("Music is playing in background. Use taskbar controls.", "Slide Up");
+    } else if (settings.settings.minimizeToTray) {
+      await win.hide();
+    } else {
+      await win.close();
+    }
   } catch {
     toast.info("Window controls are available in the desktop app.");
   }
@@ -74,6 +122,7 @@ async function windowAction(action: "minimize" | "maximize" | "close") {
 
     <!-- Right: Theme switcher & Window Controls -->
     <div class="ml-auto flex shrink-0 items-center gap-2">
+      <!-- Theme switcher -->
       <div class="flex items-center rounded-full border border-line bg-panel p-0.5">
         <button
           type="button"
@@ -93,6 +142,57 @@ async function windowAction(action: "minimize" | "maximize" | "close") {
         >
           <Moon :size="13" />
         </button>
+      </div>
+
+      <!-- Settings Dropdown Menu (Right of Theme Switcher) -->
+      <div ref="menuRef" class="relative">
+        <button
+          type="button"
+          class="flex h-7.5 w-7.5 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-ink cursor-pointer"
+          :class="{ 'bg-hover text-ink': menuOpen }"
+          title="Settings & More"
+          @click.stop="menuOpen = !menuOpen"
+        >
+          <Settings :size="15" />
+        </button>
+
+        <!-- Dropdown Menu -->
+        <Transition name="fade-scale">
+          <div
+            v-if="menuOpen"
+            class="absolute right-0 top-full mt-1.5 w-44 z-50 rounded-xl border border-line-strong bg-elevated/95 p-1.5 shadow-xl backdrop-blur-md"
+            @click.stop
+          >
+            <button
+              type="button"
+              class="topbar-menu-item"
+              @click="openSettings('appearance')"
+            >
+              <Settings :size="14" class="text-purple-400" />
+              <span>Setting</span>
+            </button>
+
+            <button
+              type="button"
+              class="topbar-menu-item"
+              @click="checkUpdate"
+            >
+              <RefreshCw :size="14" class="text-blue-400" />
+              <span>Check Update</span>
+            </button>
+
+            <div class="my-1 h-px bg-line" />
+
+            <button
+              type="button"
+              class="topbar-menu-item"
+              @click="openAbout"
+            >
+              <Info :size="14" class="text-emerald-400" />
+              <span>About / License</span>
+            </button>
+          </div>
+        </Transition>
       </div>
 
       <div class="flex items-center gap-0.5 pl-1">
@@ -133,5 +233,36 @@ input[type="search"]::-webkit-search-results-decoration {
   -webkit-appearance: none;
   appearance: none;
   display: none;
+}
+
+.topbar-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.65rem;
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+
+.topbar-menu-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-ink);
+}
+
+.fade-scale-enter-active,
+.fade-scale-leave-active {
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.fade-scale-enter-from,
+.fade-scale-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.96);
 }
 </style>

@@ -105,6 +105,28 @@ pub fn get_recent(state: tauri::State<'_, AppState>, limit: Option<i64>) -> Resu
 }
 
 #[tauri::command]
+pub fn clear_recent(state: tauri::State<'_, AppState>) -> Result<()> {
+    {
+        let conn = state.db.lock().unwrap();
+        Repository::clear_recent(&conn)?;
+    }
+    let _ = state.app.emit(events::LIBRARY_CHANGED, ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn remove_from_recent(state: tauri::State<'_, AppState>, ids: Vec<i64>) -> Result<()> {
+    {
+        let conn = state.db.lock().unwrap();
+        for id in ids {
+            Repository::remove_from_recent(&conn, id)?;
+        }
+    }
+    let _ = state.app.emit(events::LIBRARY_CHANGED, ());
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_media(state: tauri::State<'_, AppState>, id: i64) -> Result<Option<MediaItem>> {
     let conn = state.db.lock().unwrap();
     Repository::get_media(&conn, id)

@@ -20,8 +20,14 @@ export const useLibraryStore = defineStore("library", () => {
   const initialized = ref(false);
   const unlisteners: Array<() => void> = [];
 
-  const audioItems = computed(() => items.value.filter((item) => item.kind === "audio"));
-  const videoItems = computed(() => items.value.filter((item) => item.kind === "video"));
+  const isStream = (item: MediaItem) =>
+    item.path.startsWith("http://") ||
+    item.path.startsWith("https://") ||
+    item.path.startsWith("rtmp://") ||
+    item.path.startsWith("rtsp://");
+
+  const audioItems = computed(() => items.value.filter((item) => item.kind === "audio" && !isStream(item)));
+  const videoItems = computed(() => items.value.filter((item) => item.kind === "video" && !isStream(item)));
   const favorites = computed(() => items.value.filter((item) => item.favorite));
 
   const filtered = computed(() => {
@@ -64,7 +70,11 @@ export const useLibraryStore = defineStore("library", () => {
   }
 
   function thumbnailUrl(path: string | null): string | undefined {
-    return path ? convertFileSrc(path) : undefined;
+    if (!path) return undefined;
+    if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) {
+      return path;
+    }
+    return convertFileSrc(path);
   }
 
   function resetFilters() {
@@ -164,6 +174,41 @@ export const useLibraryStore = defineStore("library", () => {
     await refresh();
   }
 
+  async function removeMany(ids: number[], deleteFiles = false) {
+    for (const id of ids) {
+      await api.deleteMedia(id, deleteFiles);
+    }
+    await refresh();
+  }
+
+  async function clearRecent() {
+    try {
+      await api.clearRecent();
+    } catch (e) {
+      console.warn("clearRecent error:", e);
+    }
+    recent.value = [];
+    await refresh();
+  }
+
+  async function removeFromRecent(ids: number[]) {
+    try {
+      await api.removeFromRecent(ids);
+    } catch (e) {
+      console.warn("removeFromRecent error:", e);
+    }
+    const idSet = new Set(ids);
+    recent.value = recent.value.filter((item) => !idSet.has(item.id));
+    await refresh();
+  }
+
+  async function removeFavorites(ids: number[]) {
+    for (const id of ids) {
+      await api.setFavorite(id, false);
+    }
+    await refresh();
+  }
+
   async function clear(kind: "audio" | "video") {
     const removed = await api.clearLibrary(kind);
     await refresh();
@@ -197,6 +242,10 @@ export const useLibraryStore = defineStore("library", () => {
     importPaths,
     toggleFavorite,
     remove,
+    removeMany,
+    clearRecent,
+    removeFromRecent,
+    removeFavorites,
     clear,
   };
 });

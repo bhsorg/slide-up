@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Plus, MoreVertical, Play, Heart, ListPlus, ListMusic, Trash2, X, Film, Captions, Info } from "@lucide/vue";
+import { Plus, MoreVertical, Play, Heart, ListPlus, ListMusic, Trash2, X, Film, Captions, Info, Tv } from "@lucide/vue";
 import { usePlayerStore } from "../stores/player";
 import { useLibraryStore } from "../stores/library";
 import { useToast } from "../composables/useToast";
 import { usePlaylistPicker } from "../composables/usePlaylistPicker";
 import { useMediaProperties } from "../composables/useMediaProperties";
 import { useStoryboardTask } from "../composables/useStoryboardTask";
-import { api } from "../services/tauri";
-import { formatDuration } from "../types/media";
+import { useSubtitleAvailability } from "../composables/useSubtitleAvailability";
+import { formatDuration, type MediaItem } from "../types/media";
 import ContextMenu from "./ContextMenu.vue";
 import AppLogo from "./AppLogo.vue";
 import type { ContextMenuItem } from "../types/contextMenu";
@@ -23,9 +23,14 @@ const toast = useToast();
 const picker = usePlaylistPicker();
 const properties = useMediaProperties();
 const storyboard = useStoryboardTask();
+const subtitles = useSubtitleAvailability();
 
 function playerThumbnail(path: string | null) {
-  return path ? convertFileSrc(path) : undefined;
+  if (!path) return undefined;
+  if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) {
+    return path;
+  }
+  return convertFileSrc(path);
 }
 
 const list = computed(() => {
@@ -36,6 +41,14 @@ const list = computed(() => {
 });
 
 const activeIndex = computed(() => player.currentIndex ?? 0);
+
+watch(list, (items) => {
+  void subtitles.checkMany(items);
+}, { immediate: true });
+
+function hasCaption(item: MediaItem): boolean {
+  return item.kind === "video" && subtitles.has(item.id);
+}
 
 async function playAt(index: number) {
   if (player.queue.length > 0) {
@@ -65,9 +78,10 @@ function openItemMenu(event: MouseEvent, index: number) {
   const item = list.value[index];
   if (item?.kind === "video") {
     void storyboard.check(item.id);
-    void api.hasSubtitle(item.id).then((value) => {
+    subtitleAvailable.value = subtitles.get(item.id) ?? false;
+    void subtitles.check(item.id).then((value) => {
       subtitleAvailable.value = value;
-    }).catch(() => undefined);
+    });
   }
 }
 
@@ -247,20 +261,28 @@ async function onMenuSelect(index: number) {
             v-if="item.thumbnailPath"
             :src="playerThumbnail(item.thumbnailPath)"
             :alt="item.title"
-            class="h-full w-full object-cover"
+            loading="lazy"
+            class="h-full w-full object-cover z-1"
+            @error="($event.target as HTMLImageElement).style.display = 'none'"
           />
-          <div v-else class="flex h-full w-full items-center justify-center text-faint bg-panel">
-            <AppLogo class="h-5 w-5 opacity-80" />
+          <div class="flex h-full w-full items-center justify-center text-faint bg-panel">
+            <Tv v-if="item.id < -1000 || item.artist === 'Live TV'" :size="16" class="text-purple-400 opacity-90" />
+            <AppLogo v-else class="h-5 w-5 opacity-80" />
           </div>
         </div>
 
         <!-- Track Title & Subtitle -->
         <div class="min-w-0 flex-1">
-          <div
-            class="truncate text-[12px] font-semibold"
-            :class="activeIndex === index ? 'text-purple' : 'text-ink'"
-          >
-            {{ item.title }}
+          <div class="flex min-w-0 items-center gap-1.5">
+            <span
+              class="truncate text-[12px] font-semibold"
+              :class="activeIndex === index ? 'text-purple' : 'text-ink'"
+            >{{ item.title }}</span>
+            <span
+              v-if="hasCaption(item)"
+              class="shrink-0 rounded bg-purple/20 px-1 text-[9px] font-bold leading-4 text-purple"
+              title="Subtitles available"
+            >CC</span>
           </div>
           <div class="truncate text-[10px] text-muted">
             {{ item.artist || (item.kind === 'video' ? 'Video' : 'Unknown Artist') }}
@@ -269,8 +291,18 @@ async function onMenuSelect(index: number) {
 
         <!-- Track Duration & More Dots -->
         <div class="flex items-center gap-1 shrink-0">
-          <span class="text-[10.5px] tabular-nums text-muted">
+          <span
+            v-if="item.codec === 'Live HLS' || item.artist === 'Live TV'"
+            class="live-dot-badge scale-90"
+          >
+            <span class="live-dot"></span>
+            LIVE
+          </span>
+          <span v-else-if="item.durationMs > 0" class="text-[10.5px] tabular-nums text-muted">
             {{ formatDuration(item.durationMs) }}
+          </span>
+          <span v-else class="text-[10.5px] tabular-nums text-muted">
+            {{ item.path.startsWith('http') ? 'Stream' : '--:--' }}
           </span>
           <button
             type="button"

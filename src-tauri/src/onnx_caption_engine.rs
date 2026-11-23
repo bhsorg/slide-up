@@ -41,6 +41,32 @@ use std::f32::consts::PI;
 use std::fs;
 use std::path::Path;
 
+/// Which execution provider the SenseVoice STT session should use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptionDevice {
+    Auto,
+    Cpu,
+    Gpu,
+}
+
+impl CaptionDevice {
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "cpu" => Self::Cpu,
+            "gpu" => Self::Gpu,
+            _ => Self::Auto,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Cpu => "cpu",
+            Self::Gpu => "gpu",
+        }
+    }
+}
+
 pub struct OnnxCaptionEngine {
     vad_session: Session,
     stt_session: Session,
@@ -50,8 +76,8 @@ pub struct OnnxCaptionEngine {
 }
 
 impl OnnxCaptionEngine {
-    /// Auto GPU (DirectML/CoreML/CUDA) + CPU Fallback ke saath dono ONNX models load karta hai
-    pub fn new(model_dir: &Path) -> Result<Self> {
+    /// Load both ONNX models using the requested execution provider preference.
+    pub fn new(model_dir: &Path, device: CaptionDevice) -> Result<Self> {
         let vad_path = model_dir.join("silero_vad.onnx");
         let stt_path = model_dir.join("model.int8.onnx");
         let tokens_path = model_dir.join("tokens.txt");
@@ -68,8 +94,8 @@ impl OnnxCaptionEngine {
             .commit_from_file(&vad_path)
             .context("Failed to load silero_vad.onnx")?;
 
-        // 2. SenseVoice STT ke liye pehle GPU try karein, fail hone par CPU fallback
-        let (stt_session, provider_name) = Self::build_stt_session(&stt_path, optimal_threads)?;
+        // 2. SenseVoice STT session with the user's provider preference.
+        let (stt_session, provider_name) = Self::build_stt_session(&stt_path, optimal_threads, device)?;
 
         // 3. tokens.txt load karein
         let vocab = Self::load_vocab(&tokens_path)?;
@@ -86,45 +112,66 @@ impl OnnxCaptionEngine {
         })
     }
 
-    fn build_stt_session(model_path: &Path, threads: usize) -> Result<(Session, String)> {
-        // GPU Provider try karein (OS ke hisaab se)
-        #[cfg(target_os = "windows")]
-        let gpu_attempt = Session::builder()?
+    /// Try the platform's GPU execution provider. Returns a friendly error if
+    /// the bundled ONNX Runtime build or the machine cannot provide it.
+    #[cfg(target_os = "windows")]
+    fn build_gpu_session(model_path: &Path) -> Result<(Session, &'static str)> {
+        let session = Session::builder()?
             .with_execution_providers([DirectML::default().build()]).map_err(ort_builder_err)?
             .with_optimization_level(GraphOptimizationLevel::Level1).map_err(ort_builder_err)?
-            .commit_from_file(model_path);
-        #[cfg(target_os = "windows")]
-        let gpu_label = "DirectML (GPU)";
+            .commit_from_file(model_path)
+            .context("DirectML is not available in this ONNX Runtime build")?;
+        Ok((session, "DirectML (GPU)"))
+    }
 
-        #[cfg(target_os = "macos")]
-        let gpu_attempt = Session::builder()?
+    #[cfg(target_os = "macos")]
+    fn build_gpu_session(model_path: &Path) -> Result<(Session, &'static str)> {
+        let session = Session::builder()?
             .with_execution_providers([CoreML::default().build()]).map_err(ort_builder_err)?
             .with_optimization_level(GraphOptimizationLevel::Level1).map_err(ort_builder_err)?
-            .commit_from_file(model_path);
-        #[cfg(target_os = "macos")]
-        let gpu_label = "CoreML (GPU)";
+            .commit_from_file(model_path)
+            .context("CoreML is not available in this ONNX Runtime build")?;
+        Ok((session, "CoreML (GPU)"))
+    }
 
-        #[cfg(target_os = "linux")]
-        let gpu_attempt = Session::builder()?
+    #[cfg(target_os = "linux")]
+    fn build_gpu_session(model_path: &Path) -> Result<(Session, &'static str)> {
+        let session = Session::builder()?
             .with_execution_providers([CUDA::default().build()]).map_err(ort_builder_err)?
             .with_optimization_level(GraphOptimizationLevel::Level1).map_err(ort_builder_err)?
-            .commit_from_file(model_path);
-        #[cfg(target_os = "linux")]
-        let gpu_label = "CUDA (GPU)";
+            .commit_from_file(model_path)
+            .context("CUDA is not available in this ONNX Runtime build")?;
+        Ok((session, "CUDA (GPU)"))
+    }
 
-        if let Ok(session) = gpu_attempt {
-            return Ok((session, gpu_label.to_string()));
-        }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    fn build_gpu_session(_model_path: &Path) -> Result<(Session, &'static str)> {
+        anyhow::bail!("GPU inference is not available on this platform")
+    }
 
-        // Fallback: Low-CPU thread-limited session
-        let cpu_session = Session::builder()?
+    fn build_cpu_session(model_path: &Path, threads: usize) -> Result<(Session, String)> {
+        let session = Session::builder()?
             .with_execution_providers([CPU::default().build()]).map_err(ort_builder_err)?
             .with_optimization_level(GraphOptimizationLevel::Level1).map_err(ort_builder_err)?
             .with_intra_threads(threads).map_err(ort_builder_err)?
             .commit_from_file(model_path)
             .context("Failed to load STT ONNX model on CPU")?;
+        Ok((session, format!("CPU ({} threads)", threads)))
+    }
 
-        Ok((cpu_session, format!("CPU ({} threads)", threads)))
+    fn build_stt_session(model_path: &Path, threads: usize, device: CaptionDevice) -> Result<(Session, String)> {
+        match device {
+            CaptionDevice::Cpu => Self::build_cpu_session(model_path, threads),
+            CaptionDevice::Gpu => {
+                let (session, label) = Self::build_gpu_session(model_path)
+                    .context("GPU caption inference could not start. Choose Auto or CPU in Settings.")?;
+                Ok((session, label.to_string()))
+            }
+            CaptionDevice::Auto => match Self::build_gpu_session(model_path) {
+                Ok((session, label)) => Ok((session, label.to_string())),
+                Err(_) => Self::build_cpu_session(model_path, threads),
+            },
+        }
     }
 
     /// Silero VAD check: 512 samples (32ms @ 16kHz) par speech probability return karta hai

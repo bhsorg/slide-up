@@ -28,3 +28,12 @@ export interface UpscalerModelStatus {
   isAvailable: boolean;
   sizeOnDiskMb: number;
 }
+
+/** Throttled payload of the `upscale-progress` Tauri event. */
+export interface UpscaleProgress {
+  outputPath: string;
+  processedFrames: number;
+  totalFrames: number;
+  percentage: number;
+  status: string;
+}

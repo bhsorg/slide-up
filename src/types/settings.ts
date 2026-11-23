@@ -1,12 +1,14 @@
 export type Theme = "dark" | "light";
 export type ViewId =
   | "home"
+  | "tv"
   | "music"
   | "videos"
   | "playlists"
   | "favorites"
   | "recent"
-  | "settings";
+  | "settings"
+  | "about";
 
 export interface Shortcuts {
   playPause: string;
@@ -75,9 +77,17 @@ export interface AppSettings {
   autoScanOnStartup: boolean;
   startMinimized: boolean;
   minimizeToTray: boolean;
+  taskbarControls: boolean;
   customExtensions: CustomExtension[];
   /** Whether live captions are enabled (requires the model to be downloaded). */
   liveCaptionsEnabled: boolean;
+  /** SenseVoice execution provider: auto (GPU with CPU fallback), cpu or gpu. */
+  captionDevice: "auto" | "cpu" | "gpu";
+  videoBrightness: number;
+  videoContrast: number;
+  videoSaturation: number;
+  videoGamma: number;
+  transparentFilterDialog: boolean;
   shortcuts: Shortcuts;
 }
 
@@ -122,7 +132,14 @@ export const defaultSettings = (): AppSettings => ({
   autoScanOnStartup: false,
   startMinimized: false,
   minimizeToTray: false,
+  taskbarControls: false,
   customExtensions: [],
   liveCaptionsEnabled: false,
+  captionDevice: "auto",
+  videoBrightness: 0,
+  videoContrast: 0,
+  videoSaturation: 0,
+  videoGamma: 0,
+  transparentFilterDialog: false,
   shortcuts: defaultShortcuts(),
 });

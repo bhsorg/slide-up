@@ -10,6 +10,7 @@ export interface TrackInfo {
   kind: "audio" | "video";
   thumbnailPath: string | null;
   durationMs: number;
+  codec?: string | null;
 }
 
 export interface PlayerState {
@@ -23,8 +24,10 @@ export interface PlayerState {
   shuffle: boolean;
   repeat: PlayMode;
   fullscreen: boolean;
+  videoTracks: MediaTrack[];
   audioTracks: MediaTrack[];
   subtitleTracks: MediaTrack[];
+  activeVideoTrack: number;
   activeAudioTrack: number;
   activeSubtitleTrack: number;
   videoWidth: number;
@@ -61,8 +64,10 @@ export const initialPlayerState = (): PlayerState => ({
   shuffle: false,
   repeat: "off",
   fullscreen: false,
+  videoTracks: [],
   audioTracks: [],
   subtitleTracks: [],
+  activeVideoTrack: -1,
   activeAudioTrack: -1,
   activeSubtitleTrack: -1,
   videoWidth: 0,

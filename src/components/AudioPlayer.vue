@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import {
   Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1, Heart,
-  Volume2, VolumeX, ListPlus, Plus, Music2,
+  Volume2, VolumeX, ListPlus, Plus, MicVocal, User, Music2,
 } from "@lucide/vue";
 import { usePlayerStore } from "../stores/player";
 import { useLibraryStore } from "../stores/library";
 import { useToast } from "../composables/useToast";
 import { usePlaylistPicker } from "../composables/usePlaylistPicker";
+import { useLyrics } from "../composables/useLyrics";
+import { useArtistBio } from "../composables/useArtistBio";
 import AppLogo from "./AppLogo.vue";
 import { formatDuration } from "../types/media";
 
@@ -15,11 +17,51 @@ const player = usePlayerStore();
 const library = useLibraryStore();
 const toast = useToast();
 const picker = usePlaylistPicker();
+const artistBio = useArtistBio();
 
 const current = computed(() => player.state.current);
 const artwork = computed(() => current.value?.thumbnailPath ? library.thumbnailUrl(current.value.thumbnailPath) : null);
 const favorite = computed(() => (current.value ? (library.byId(current.value.id)?.favorite ?? false) : false));
 const bars = Array.from({ length: 28 }, (_, index) => index);
+
+const {
+  status: lyricsStatus,
+  activeLine,
+  prevLine,
+  nextLine,
+  errorMessage: lyricsError,
+  showLyrics,
+  setShowLyrics,
+  load: loadLyrics,
+  clear: clearLyrics,
+  updatePosition: updateLyricPosition,
+} = useLyrics();
+
+function refreshLyrics(force = false) {
+  const track = player.state.current;
+  if (!showLyrics.value || !track) return;
+  void loadLyrics(track, force).then(() => updateLyricPosition(player.state.positionMs));
+}
+
+watch(() => player.state.current?.id, () => {
+  if (!showLyrics.value) clearLyrics();
+  else refreshLyrics();
+}, { immediate: true });
+
+watch(() => player.state.positionMs, (positionMs) => updateLyricPosition(positionMs));
+
+function toggleLyrics() {
+  setShowLyrics(!showLyrics.value);
+  if (showLyrics.value) refreshLyrics();
+}
+
+function retryLyrics() {
+  refreshLyrics(true);
+}
+
+function seekToLine(timeMs: number) {
+  if (timeMs >= 0) void player.seek(timeMs);
+}
 
 async function toggleFavorite() {
   if (!current.value) return;
@@ -67,7 +109,80 @@ function addToPlaylist() {
 
       <div class="text-center">
         <h1 class="truncate text-2xl font-bold tracking-tight text-ink">{{ current.title }}</h1>
-        <p class="mt-1 truncate text-sm text-muted">{{ current.artist || "Unknown artist" }}<span v-if="current.album"> · {{ current.album }}</span></p>
+        <div class="mt-1 flex items-center justify-center gap-2 truncate text-sm text-muted">
+          <button
+            type="button"
+            class="hover:text-purple-300 hover:underline cursor-pointer transition-colors font-medium"
+            title="View artist biopic & photo"
+            @click="artistBio.showArtist(current.artist || '')"
+          >
+            {{ current.artist || "Unknown artist" }}
+          </button>
+          <span v-if="current.album" class="text-faint">· {{ current.album }}</span>
+          <button
+            v-if="current.artist && !/unknown/i.test(current.artist)"
+            type="button"
+            class="inline-flex items-center gap-1 rounded-full bg-purple/15 px-2 py-0.5 text-[10.5px] font-medium text-purple-300 hover:bg-purple/25 transition-colors"
+            title="Artist bio & photo"
+            @click="artistBio.showArtist(current.artist)"
+          >
+            <User :size="11" />
+            <span>Bio</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Line-by-Line Lyrics Display (No textarea box, pure typography) -->
+      <div v-if="showLyrics" class="mt-4 w-full max-w-[620px] px-4 text-center select-none">
+        <div v-if="lyricsStatus === 'loading'" class="py-2 text-xs text-muted animate-pulse">
+          Looking up lyrics…
+        </div>
+
+        <div v-else-if="lyricsStatus === 'notfound'" class="py-2 flex items-center justify-center gap-2 text-xs text-muted">
+          <span>No lyrics found for this track.</span>
+          <button
+            type="button"
+            class="text-purple underline hover:text-purple-300 font-medium ml-1"
+            @click="retryLyrics"
+          >Retry</button>
+        </div>
+
+        <div v-else-if="lyricsStatus === 'error'" class="py-2 flex items-center justify-center gap-2 text-xs text-muted">
+          <span>{{ lyricsError }}</span>
+          <button
+            type="button"
+            class="text-purple underline hover:text-purple-300 font-medium ml-1"
+            @click="retryLyrics"
+          >Retry</button>
+        </div>
+
+        <div v-else-if="lyricsStatus === 'ready'" class="flex flex-col items-center justify-center min-h-[68px]">
+          <!-- Previous Line -->
+          <div
+            v-if="prevLine?.text"
+            class="text-[12px] text-muted/40 transition-all duration-300 line-clamp-1 mb-1 cursor-pointer hover:text-muted/70"
+            @click="seekToLine(prevLine.timeMs)"
+          >
+            {{ prevLine.text }}
+          </div>
+
+          <!-- Active Current Line (Prominent & Focused) -->
+          <div
+            class="text-lg sm:text-xl font-bold tracking-tight text-purple-soft transition-all duration-300 drop-shadow-sm px-2 cursor-pointer hover:text-white"
+            @click="activeLine ? seekToLine(activeLine.timeMs) : undefined"
+          >
+            {{ activeLine?.text || "♫ ♪ ♫" }}
+          </div>
+
+          <!-- Next Line Preview -->
+          <div
+            v-if="nextLine?.text"
+            class="text-[12px] text-muted/50 transition-all duration-300 line-clamp-1 mt-1 cursor-pointer hover:text-muted/80"
+            @click="seekToLine(nextLine.timeMs)"
+          >
+            {{ nextLine.text }}
+          </div>
+        </div>
       </div>
 
       <div class="mt-4 flex h-8 items-end gap-[3px]" aria-hidden="true">
@@ -127,6 +242,13 @@ function addToPlaylist() {
           </button>
           <button type="button" class="audio-control" title="Add to queue" @click="addToQueue"><ListPlus :size="17" /></button>
           <button type="button" class="audio-control" title="Add to playlist…" @click="addToPlaylist"><Plus :size="17" /></button>
+          <button
+            type="button"
+            class="audio-control"
+            :class="showLyrics ? 'text-purple' : ''"
+            :title="showLyrics ? 'Hide lyrics' : 'Show lyrics (LRCLIB)'"
+            @click="toggleLyrics"
+          ><MicVocal :size="17" /></button>
 
           <div class="ml-auto flex items-center gap-2">
             <button type="button" class="audio-control" title="Mute" @click="player.toggleMute()">
@@ -177,4 +299,7 @@ function addToPlaylist() {
   transition: background var(--t-fast), color var(--t-fast);
 }
 .audio-control:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.lyrics-viewport::-webkit-scrollbar { width: 5px; }
+.lyrics-viewport::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 999px; }
 </style>

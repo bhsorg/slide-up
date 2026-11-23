@@ -1,13 +1,20 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from "vue";
-import { Clapperboard, X } from "@lucide/vue";
+import { Clapperboard, X, User } from "@lucide/vue";
 import { useMediaProperties } from "../composables/useMediaProperties";
+import { useArtistBio } from "../composables/useArtistBio";
 import { useLibraryStore } from "../stores/library";
 import { formatBytes, formatDuration } from "../types/media";
 import AppLogo from "./AppLogo.vue";
 
 const { open, item, closeProperties } = useMediaProperties();
+const { showArtist } = useArtistBio();
 const library = useLibraryStore();
+
+function openArtistBio(artistName: string) {
+  closeProperties();
+  void showArtist(artistName);
+}
 
 function formatDate(ms: number | null) {
   if (!ms) return "Never";
@@ -87,7 +94,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
             class="flex items-start justify-between gap-4 rounded-lg px-3 py-1.5 text-[12px]"
           >
             <span class="shrink-0 text-faint">{{ row.label }}</span>
-            <span class="min-w-0 break-all text-right text-ink">{{ row.value }}</span>
+            <span v-if="row.label === 'Artist' && item.artist && !/unknown/i.test(item.artist)" class="min-w-0 flex items-center justify-end gap-1.5 text-right">
+              <span class="break-all text-ink">{{ row.value }}</span>
+              <button
+                type="button"
+                class="rounded bg-purple/15 px-1.5 py-0.5 text-[10.5px] font-medium text-purple-300 hover:bg-purple/25 transition-colors inline-flex items-center gap-1"
+                title="View artist biopic & photo"
+                @click="openArtistBio(item.artist)"
+              >
+                <User :size="10" /> Bio
+              </button>
+            </span>
+            <span v-else class="min-w-0 break-all text-right text-ink">{{ row.value }}</span>
           </div>
           <div class="mt-2 border-t border-line px-3 pt-3">
             <p class="text-[11px] text-faint">File path</p>

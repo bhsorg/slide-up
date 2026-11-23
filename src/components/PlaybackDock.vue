@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   Play, Pause, SkipBack, SkipForward, Heart, ListPlus, ListMusic,
-  Volume2, Volume1, VolumeX, Maximize
+  Volume2, Volume1, VolumeX, Maximize, MicVocal, Tv
 } from "@lucide/vue";
 import { usePlayerStore } from "../stores/player";
 import { useLibraryStore } from "../stores/library";
 import { useToast } from "../composables/useToast";
 import { usePlaylistPicker } from "../composables/usePlaylistPicker";
+import { useLyrics } from "../composables/useLyrics";
 import AppLogo from "./AppLogo.vue";
 import { formatDuration } from "../types/media";
 
@@ -18,6 +19,35 @@ const player = usePlayerStore();
 const library = useLibraryStore();
 const toast = useToast();
 const picker = usePlaylistPicker();
+const {
+  activeLine,
+  showLyrics,
+  setShowLyrics,
+  load: loadLyrics,
+  updatePosition: updateLyricPosition,
+} = useLyrics();
+
+watch(
+  () => player.state.current?.id,
+  () => {
+    if (player.state.current && !player.isVideo) {
+      void loadLyrics(player.state.current);
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => player.state.positionMs,
+  (posMs) => {
+    updateLyricPosition(posMs);
+  },
+);
+
+function toggleLyrics() {
+  setShowLyrics(!showLyrics.value);
+  if (showLyrics.value) emit("openPlayer");
+}
 
 const showVolumePopup = ref(false);
 let volumeCloseTimer: number | undefined;
@@ -87,13 +117,19 @@ function addToPlaylist() {
       <div class="dock-thumb" @click="emit('openPlayer')" title="Now Playing">
         <img v-if="artwork && current" :src="artwork" :alt="current.title" class="h-full w-full object-cover" />
         <div v-else class="flex h-full w-full items-center justify-center text-faint bg-linear-to-br from-purple/25 via-panel to-blue/20">
-          <AppLogo class="h-6 w-6 opacity-80" />
+          <Tv v-if="player.isLive || (current?.id && current.id < -1000)" class="h-5 w-5 text-purple-400 opacity-90" />
+          <AppLogo v-else class="h-6 w-6 opacity-80" />
         </div>
       </div>
 
       <div class="dock-meta" @click="emit('openPlayer')" title="Now Playing">
-        <div class="dock-title">{{ current?.title ?? "Beautiful Nature" }}</div>
-        <div class="dock-subtitle">{{ current?.artist || "Nature World" }}</div>
+        <div class="dock-title flex items-center gap-1.5 min-w-0">
+          <span class="truncate">{{ current?.title ?? "Beautiful Nature" }}</span>
+        </div>
+        <div v-if="activeLine?.text && !player.isVideo" class="dock-lyric truncate" title="Current lyrics">
+          ♪ {{ activeLine.text }}
+        </div>
+        <div v-else class="dock-subtitle">{{ current?.artist || "Nature World" }}</div>
       </div>
 
       <button
@@ -149,7 +185,11 @@ function addToPlaylist() {
 
     <!-- Right: Timestamps, Progress Bar, Volume, Queue Badge & Queue Pill Button -->
     <div class="dock-right">
-      <span class="dock-time">
+      <span v-if="player.isLive" class="live-dot-badge">
+        <span class="live-dot"></span>
+        LIVE
+      </span>
+      <span v-else class="dock-time">
         {{ formatDuration(player.state.positionMs) }} / {{ formatDuration(player.state.durationMs) }}
       </span>
 
@@ -222,6 +262,18 @@ function addToPlaylist() {
           </button>
         </div>
       </div>
+
+      <!-- Lyrics quick toggle — opens Now Playing where the panel renders -->
+      <button
+        v-if="!player.isVideo"
+        type="button"
+        class="dock-icon-btn"
+        :class="{ active: showLyrics }"
+        :title="showLyrics ? 'Hide lyrics' : 'Show lyrics'"
+        @click="toggleLyrics"
+      >
+        <MicVocal :size="18" />
+      </button>
 
       <!-- Queue Icon Button with count badge only (matching clean compact requirement) -->
       <div class="relative flex items-center">
@@ -314,6 +366,16 @@ function addToPlaylist() {
 .dock-subtitle {
   font-size: 0.72rem;
   color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.dock-lyric {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--accent-purple, #8b5cf6);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

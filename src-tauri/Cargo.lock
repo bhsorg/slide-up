@@ -4041,6 +4041,7 @@ dependencies = [
  "lofty",
  "ndarray",
  "ort",
+ "png",
  "reqwest",
  "rusqlite",
  "rustfft",

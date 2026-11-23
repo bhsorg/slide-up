@@ -1,19 +1,30 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import { Play, FolderPlus, FilePlus2, Music2, Clapperboard, Heart, Sparkles } from "@lucide/vue";
+import { computed, ref, watch } from "vue";
+import { Play, FolderPlus, FilePlus2, Music2, Clapperboard, Heart, Sparkles, Globe, X, ListPlus, LayoutGrid, List } from "@lucide/vue";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
+import { usePlaylistStore } from "../stores/playlist";
 import { useToast } from "../composables/useToast";
 import MediaGrid from "../components/MediaGrid.vue";
 import AppLogo from "../components/AppLogo.vue";
 import type { MediaItem } from "../types/media";
 import type { ViewId } from "../types/settings";
 
-const emit = defineEmits<{ navigate: [view: ViewId] }>();
+const emit = defineEmits<{ navigate: [view: ViewId | "player"] }>();
 
 const library = useLibraryStore();
 const player = usePlayerStore();
+const playlists = usePlaylistStore();
 const toast = useToast();
+
+const viewMode = ref<"grid" | "list">(
+  (localStorage.getItem("slideup-home-view") as "grid" | "list" | null) ?? "grid",
+);
+watch(viewMode, (value) => localStorage.setItem("slideup-home-view", value));
+
+const showStreamModal = ref(false);
+const streamUrl = ref("");
+const streamTitle = ref("");
 
 const featured = computed(() => library.recent[0] ?? library.items[0] ?? null);
 const greeting = computed(() => {
@@ -44,6 +55,79 @@ async function addFolder() {
     toast.error(String(error), "Scan failed");
   }
 }
+
+async function playStream(queueOnly = false) {
+  const url = streamUrl.value.trim();
+  if (!url) {
+    toast.error("Please enter a stream URL");
+    return;
+  }
+  if (!/^https?:\/\/|^rt[ms]p:\/\//i.test(url)) {
+    toast.error("URL must begin with http://, https://, rtmp://, or rtsp://");
+    return;
+  }
+
+  // If user pasted an .m3u playlist link, parse & import it rather than sending raw text file to MPV
+  if (/\.m3u(\?.*)?$/i.test(url)) {
+    try {
+      toast.info("Parsing M3U playlist tracks…");
+      const res = await playlists.importM3uFromUrl(url, streamTitle.value);
+      toast.success(`Imported playlist “${res.name}” (${res.total} tracks · ${res.audioCount} Audio, ${res.videoCount} Video).`);
+      if (!queueOnly) {
+        await playlists.play(res.id, 0);
+      }
+      streamUrl.value = "";
+      streamTitle.value = "";
+      showStreamModal.value = false;
+      return;
+    } catch (err) {
+      toast.error(String(err), "Could not import M3U playlist");
+      return;
+    }
+  }
+
+  const rawFilename = url.split("/").pop()?.split("?")[0] || "Network Stream";
+  let decodedFilename = rawFilename;
+  try {
+    decodedFilename = decodeURIComponent(rawFilename);
+  } catch {
+    // keep raw if URI is not percent-encoded
+  }
+  const name = streamTitle.value.trim() || decodedFilename;
+  const streamItem: MediaItem = {
+    id: -Math.floor(Date.now() % 1000000000),
+    path: url,
+    kind: "video",
+    title: name,
+    artist: "Network Stream",
+    album: "Stream",
+    durationMs: 0,
+    codec: null,
+    width: null,
+    height: null,
+    sizeBytes: 0,
+    thumbnailPath: null,
+    favorite: false,
+    playCount: 0,
+    lastPlayedAt: Date.now(),
+    addedAt: Date.now(),
+  };
+
+  try {
+    if (queueOnly) {
+      await player.queueAdd(streamItem);
+      toast.success(`Added “${name}” to queue.`);
+    } else {
+      await player.play(streamItem);
+      emit("navigate", "player");
+    }
+    streamUrl.value = "";
+    streamTitle.value = "";
+    showStreamModal.value = false;
+  } catch (err) {
+    toast.error(String(err), "Stream playback failed");
+  }
+}
 </script>
 
 <template>
@@ -56,9 +140,30 @@ async function addFolder() {
         <h1 class="text-xl font-bold tracking-tight text-ink">{{ greeting }} 👋</h1>
         <p class="mt-0.5 text-[12px] text-muted">Everything you love to watch and listen to, in one place.</p>
       </div>
-      <div class="flex gap-2">
+      <div class="flex items-center gap-2">
+        <div class="flex items-center rounded-xl border border-line bg-panel p-1">
+          <button
+            type="button"
+            class="view-toggle"
+            :class="viewMode === 'grid' ? 'bg-purple text-white' : 'text-faint'"
+            title="Grid view"
+            @click="viewMode = 'grid'"
+          >
+            <LayoutGrid :size="15" />
+          </button>
+          <button
+            type="button"
+            class="view-toggle"
+            :class="viewMode === 'list' ? 'bg-purple text-white' : 'text-faint'"
+            title="List view"
+            @click="viewMode = 'list'"
+          >
+            <List :size="15" />
+          </button>
+        </div>
         <button type="button" class="home-action" @click="addFiles"><FilePlus2 :size="14" /> Add files</button>
         <button type="button" class="home-action" @click="addFolder"><FolderPlus :size="14" /> Add folder</button>
+        <button type="button" class="home-action" @click="showStreamModal = true"><Globe :size="14" /> Add stream</button>
       </div>
     </div>
 
@@ -104,7 +209,82 @@ async function addFolder() {
       </button>
     </div>
 
-    <MediaGrid :items="library.recent.slice(0, 12)" context-name="Recently played" @play="play" />
+    <MediaGrid
+      :items="library.recent.slice(0, 12)"
+      :mode="viewMode"
+      :selectable="false"
+      context-name="Recently played"
+      @play="play"
+    />
+
+    <!-- Open Network Stream Modal -->
+    <Transition name="fade-scale">
+      <div v-if="showStreamModal" class="modal-backdrop" @click.self="showStreamModal = false">
+        <div class="modal-card">
+          <div class="modal-header">
+            <div class="flex items-center gap-2">
+              <Globe :size="17" class="text-purple-400" />
+              <h3 class="modal-title">Open Network Stream</h3>
+            </div>
+            <button type="button" class="modal-close-btn" @click="showStreamModal = false">
+              <X :size="16" />
+            </button>
+          </div>
+
+          <div class="modal-body space-y-3">
+            <div>
+              <label class="block text-[11px] font-semibold text-muted uppercase tracking-wider mb-1.5">
+                Stream / Media URL
+              </label>
+              <input
+                v-model="streamUrl"
+                type="url"
+                placeholder="https://example.com/live/stream.m3u8 or media URL"
+                class="stream-input"
+                autofocus
+                @keyup.enter="playStream(false)"
+              />
+              <p class="mt-1 text-[10.5px] text-faint">
+                Supports HLS (.m3u8), RTSP, RTMP, HTTP/HTTPS audio & video streams.
+              </p>
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-semibold text-muted uppercase tracking-wider mb-1.5">
+                Stream Title (Optional)
+              </label>
+              <input
+                v-model="streamTitle"
+                type="text"
+                placeholder="e.g. My Online Video / Live Radio"
+                class="stream-input"
+                @keyup.enter="playStream(false)"
+              />
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="btn-footer-secondary"
+              @click="playStream(true)"
+            >
+              <ListPlus :size="14" />
+              <span>Add to Queue</span>
+            </button>
+
+            <button
+              type="button"
+              class="btn-footer-primary"
+              @click="playStream(false)"
+            >
+              <Play :size="14" fill="currentColor" />
+              <span>Play Now</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -140,5 +320,155 @@ async function addFolder() {
 .home-action:hover {
   color: var(--text-primary);
   border-color: var(--border-strong);
+}
+
+.view-toggle {
+  display: flex;
+  height: 1.85rem;
+  width: 1.85rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.view-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+/* Stream Modal Styles */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.15rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.75rem;
+  width: 1.75rem;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.modal-close-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.modal-body {
+  padding: 1.15rem;
+}
+
+.stream-input {
+  width: 100%;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  outline: none;
+  transition: border-color var(--t-fast);
+}
+
+.stream-input:focus {
+  border-color: var(--accent-purple, #8b5cf6);
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.85rem 1.15rem;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+}
+
+.btn-footer-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2.15rem;
+  padding: 0 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.btn-footer-secondary:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.btn-footer-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2.15rem;
+  padding: 0 1rem;
+  border-radius: 8px;
+  background: var(--accent-purple, #8b5cf6);
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--t-fast);
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
+}
+
+.btn-footer-primary:hover {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+
+.fade-scale-enter-active,
+.fade-scale-leave-active {
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.fade-scale-enter-from,
+.fade-scale-leave-to {
+  opacity: 0;
+  transform: scale(0.96);
 }
 </style>

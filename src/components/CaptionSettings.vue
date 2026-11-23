@@ -28,6 +28,11 @@ let unlisten: (() => void) | null = null;
 const downloading = computed(() => started.value);
 const isGpu = computed(() => /gpu/i.test(status.value?.activeProvider ?? ""));
 const downloaded = computed(() => status.value?.isDownloaded === true && !downloading.value);
+const devices = [
+  { value: "auto", label: "Auto" },
+  { value: "cpu", label: "CPU" },
+  { value: "gpu", label: "GPU" },
+] as const;
 
 async function loadStatus() {
   try {
@@ -81,6 +86,35 @@ async function loadEngine() {
     toast.success("Caption engine loaded.");
   } catch (error) {
     toast.error(String(error), "Caption engine");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function unloadEngine() {
+  busy.value = true;
+  try {
+    await api.unloadCaptionEngine();
+    await loadStatus();
+    toast.success("Caption engine unloaded. Memory has been freed.");
+  } catch (error) {
+    toast.error(String(error), "Caption engine");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function changeDevice(event: Event) {
+  const device = (event.target as HTMLInputElement).value as "auto" | "cpu" | "gpu";
+  busy.value = true;
+  try {
+    await settings.patch({ captionDevice: device });
+    const provider = await api.setCaptionDevice(device);
+    await loadStatus();
+    toast.success(`Caption engine: ${provider}`);
+  } catch (error) {
+    toast.error(String(error), "Caption device");
+    await loadStatus();
   } finally {
     busy.value = false;
   }
@@ -174,11 +208,40 @@ onUnmounted(() => {
           <span class="model-size"><HardDrive :size="13" /> {{ status?.modelSizeMb ?? 0 }} MB on disk</span>
         </div>
 
-        <div v-if="status?.isDownloaded && !status?.isLoaded" class="load-hint">
-          <span>The engine is not running yet.</span>
-          <button type="button" class="link-btn" :disabled="busy" @click="loadEngine">
+        <div v-if="status?.isDownloaded" class="load-hint">
+          <span v-if="status?.isLoaded">The engine is running and using memory.</span>
+          <span v-else>The engine is not running yet — it only loads when you ask for it.</span>
+          <button v-if="status?.isLoaded" type="button" class="link-btn" :disabled="busy" @click="unloadEngine">
+            Unload engine
+          </button>
+          <button v-else type="button" class="link-btn" :disabled="busy" @click="loadEngine">
             <RefreshCw v-if="busy" :size="12" class="spin" /> Load engine
           </button>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">Execution provider</div>
+            <div class="setting-hint">Auto prefers the GPU and falls back to CPU. Forcing GPU requires an ONNX Runtime build with that provider.</div>
+          </div>
+          <div class="setting-control device-switch">
+            <label
+              v-for="option in devices"
+              :key="option.value"
+              class="device-option"
+              :class="{ active: settings.settings.captionDevice === option.value }"
+            >
+              <input
+                type="radio"
+                name="caption-device"
+                :value="option.value"
+                :checked="settings.settings.captionDevice === option.value"
+                :disabled="busy"
+                @change="changeDevice"
+              />
+              {{ option.label }}
+            </label>
+          </div>
         </div>
 
         <div class="setting-row">
@@ -200,7 +263,7 @@ onUnmounted(() => {
         <p class="footnote">
           The engine provides voice-activity detection and transcription, but live audio
           capture and the on-screen overlay are not wired to playback yet. The hardware
-          badge reflects the bundled ONNX Runtime build — the stock DLL is CPU-only.
+          badge shows the provider actually in use after switching the setting above.
         </p>
         <div class="model-actions">
           <button type="button" class="btn-outline danger" :disabled="busy" @click="remove">
@@ -256,6 +319,11 @@ onUnmounted(() => {
 .setting-name { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
 .setting-hint { margin-top: 0.15rem; font-size: 0.7rem; line-height: 1.45; color: var(--text-muted); }
 .setting-control { display: flex; justify-content: flex-end; }
+.device-switch { gap: 0.3rem; }
+.device-option { display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer; border-radius: 0.5rem; border: 1px solid var(--border-subtle); background: var(--bg-elevated); padding: 0.32rem 0.55rem; font-size: 0.68rem; color: var(--text-muted); transition: border-color var(--t-fast), background var(--t-fast); }
+.device-option.active { border-color: var(--accent-purple); background: rgba(135, 63, 255, 0.16); color: var(--text-primary); }
+.device-option input { margin: 0; accent-color: var(--accent-purple); }
+.device-option:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
 .footnote { margin: 0; font-size: 0.68rem; line-height: 1.45; color: var(--text-muted); }
 .footnote + .model-actions { margin-top: 0.9rem; }
 .busy-line { display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.6rem; font-size: 0.68rem; color: var(--text-muted); }

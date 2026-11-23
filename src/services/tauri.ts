@@ -5,6 +5,14 @@ import type { MediaFilter, MediaItem, ScanResult } from "../types/media";
 import type { PlayerSnapshot, MediaTrack, PlayMode, PlayerState } from "../types/player";
 import type { Playlist, PlaylistTrack } from "../types/playlist";
 import type { ModelStatus, UpscalerModelStatus } from "../types/model";
+import type { CachedLyrics, LyricsResult } from "../types/lyrics";
+
+export interface AutoVideoFilters {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  gamma: number;
+}
 
 export interface AppErrorPayload {
   code: string;
@@ -39,11 +47,14 @@ export const api = {
   appVersion: () => call<string>("app_version"),
   openExternal: (url: string) => call<void>("open_external", { url }),
   showInFolder: (path: string) => call<void>("show_in_folder", { path }),
+  fetchUrlText: (url: string) => call<string>("fetch_url_text", { url }),
 
   pickFiles: () => call<string[]>("pick_files"),
   pickFolder: () => call<string | null>("pick_folder"),
   listMedia: (filter: MediaFilter) => call<MediaItem[]>("list_media", { filter }),
   getRecent: (limit = 12) => call<MediaItem[]>("get_recent", { limit }),
+  clearRecent: () => call<void>("clear_recent"),
+  removeFromRecent: (ids: number[]) => call<void>("remove_from_recent", { ids }),
   getMedia: (id: number) => call<MediaItem | null>("get_media", { id }),
   setFavorite: (id: number, favorite: boolean) =>
     call<void>("set_favorite", { id, favorite }),
@@ -75,6 +86,7 @@ export const api = {
   isPip: () => call<boolean>("is_pip"),
   getTracks: () => call<TrackPayload>("get_tracks"),
   listAudioDevices: () => call<AudioDevice[]>("list_audio_devices"),
+  setVideoTrack: (id: number) => call<void>("set_video_track", { id }),
   setAudioTrack: (id: number) => call<void>("set_audio_track", { id }),
   setSubtitleTrack: (id: number) => call<void>("set_subtitle_track", { id }),
   addSubtitle: (path: string) => call<void>("add_subtitle", { path }),
@@ -87,6 +99,12 @@ export const api = {
     call<void>("sync_video_rect", { x, y, width, height }),
   setSurfaceVisible: (visible: boolean) => call<void>("set_surface_visible", { visible }),
   setVideoLayer: (top: boolean) => call<void>("set_video_layer", { top }),
+  setVideoFilter: (property: string, value: number) =>
+    call<void>("set_video_filter", { property, value }),
+  autoVideoFilters: () => call<AutoVideoFilters>("auto_video_filters"),
+  getLyrics: (mediaId: number) => call<CachedLyrics | null>("get_lyrics", { mediaId }),
+  saveLyrics: (mediaId: number, result: LyricsResult | null) =>
+    call<void>("save_lyrics", { mediaId, result }),
   getStoryboardFrame: (mediaId: number, index: number) =>
     call<string | null>("get_storyboard_frame", { mediaId, index }),
   generateStoryboard: (mediaId: number) =>
@@ -139,17 +157,24 @@ export const api = {
   downloadCaptionModel: () => call<void>("download_caption_model"),
   cancelModelDownload: () => call<void>("cancel_model_download"),
   loadCaptionEngine: () => call<string>("load_caption_engine"),
+  unloadCaptionEngine: () => call<void>("unload_caption_engine"),
+  setCaptionDevice: (device: "auto" | "cpu" | "gpu") =>
+    call<string>("set_caption_device", { device }),
   deleteCaptionModel: () => call<void>("delete_caption_model"),
 
   listUpscalerModels: () => call<UpscalerModelStatus[]>("list_upscaler_models"),
   downloadUpscalerModel: (id: string) => call<void>("download_upscaler_model", { id }),
   cancelUpscalerDownload: () => call<void>("cancel_upscaler_download"),
   deleteUpscalerModel: (id: string) => call<void>("delete_upscaler_model", { id }),
+  upscaleVideoWithRealEsrgan: (path: string) =>
+    call<string>("upscale_video_with_realesrgan", { path }),
 };
 
 export interface TrackPayload {
+  videoTracks?: MediaTrack[];
   audioTracks: MediaTrack[];
   subtitleTracks: MediaTrack[];
+  activeVideoTrack?: number;
   activeAudioTrack: number;
   activeSubtitleTrack: number;
 }
@@ -176,6 +201,7 @@ export const events = {
   toast: "app://toast",
   modelDownloadProgress: "model-download-progress",
   upscalerDownloadProgress: "upscaler-download-progress",
+  upscaleProgress: "upscale-progress",
 };
 
 export function onEvent<T>(event: string, handler: (payload: T) => void) {

@@ -87,8 +87,10 @@ impl MpvClient {
             fullscreen: false,
             audio_tracks: Vec::new(),
             subtitle_tracks: Vec::new(),
+            video_tracks: Vec::new(),
             active_audio_track: -1,
             active_subtitle_track: -1,
+            active_video_track: -1,
             video_width: 0,
             video_height: 0,
             error: None,
@@ -122,6 +124,23 @@ impl MpvClient {
         client.set_string("image-display-duration", "0")?;
         client.set_string("screenshot-format", "png")?;
         client.set_i64("volume", 80)?;
+        // Enable Windows SMTC media controls (media buttons next to clock/Quick Settings)
+        let _ = client.set_string("media-controls", "yes");
+        // Network stream defaults: User-Agent for streaming servers/CDNs (like archive.org) & auto-reconnect
+        let _ = client.set_string(
+            "user-agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        );
+        let _ = client.set_string(
+            "demuxer-lavf-o",
+            "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
+        );
+        let _ = client.set_string(
+            "stream-lavf-o",
+            "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
+        );
+        let _ = client.set_string("network-timeout", "30");
+        let _ = client.set_string("tls-verify", "no");
 
         let screenshots = data_dir.join("screenshots");
         let _ = std::fs::create_dir_all(&screenshots);
@@ -129,7 +148,7 @@ impl MpvClient {
 
         // mpv requires each observed property to be requested in its native
         // format; a mismatched format makes the observation silently fail.
-        let observed: [(&str, c_int); 8] = [
+        let observed: [(&str, c_int); 9] = [
             ("pause", MPV_FORMAT_FLAG),
             ("volume", MPV_FORMAT_DOUBLE),
             ("mute", MPV_FORMAT_FLAG),
@@ -138,6 +157,7 @@ impl MpvClient {
             ("aid", MPV_FORMAT_INT64),
             ("sid", MPV_FORMAT_INT64),
             ("fullscreen", MPV_FORMAT_FLAG),
+            ("paused-for-cache", MPV_FORMAT_FLAG),
         ];
         for (idx, (property, format)) in observed.into_iter().enumerate() {
             let name = CString::new(property).unwrap();
@@ -331,7 +351,16 @@ impl MpvClient {
             let _ = self.set_string("vid", "no");
         }
 
-        let path = Self::cstring(&media.path)?;
+        let mut target_path = media.path.clone();
+        if target_path.starts_with("http://") || target_path.starts_with("https://") {
+            if target_path.starts_with("http://") && target_path.contains("archive.org") {
+                target_path = format!("https://{}", &target_path[7..]);
+            }
+            if target_path.contains(' ') {
+                target_path = target_path.replace(' ', "%20");
+            }
+        }
+        let path = Self::cstring(&target_path)?;
         self.command(&["loadfile", &path.to_string_lossy(), "replace"])?;
         self.set_flag("pause", false)?;
         self.refresh_snapshot();
@@ -371,15 +400,31 @@ impl MpvClient {
     }
 
     pub fn seek_ms(&self, position_ms: i64) -> Result<()> {
-        let seconds = position_ms as f64 / 1000.0;
+        let status = self.snapshot.read().unwrap().status;
+        if status == PlayerStatus::Stopped {
+            return Ok(());
+        }
+        let seconds = (position_ms.max(0) as f64) / 1000.0;
         let value = format!("{seconds:.3}");
-        self.command(&["seek", &value, "absolute", "exact"])
+        let res = self.command(&["seek", &value, "absolute"]);
+        if let Err(err) = res {
+            tracing::warn!("mpv seek ignored or failed: {err}");
+        }
+        Ok(())
     }
 
     pub fn seek_relative(&self, delta_ms: i64) -> Result<()> {
+        let status = self.snapshot.read().unwrap().status;
+        if status == PlayerStatus::Stopped {
+            return Ok(());
+        }
         let seconds = delta_ms as f64 / 1000.0;
         let value = format!("{seconds:.3}");
-        self.command(&["seek", &value, "relative", "exact"])
+        let res = self.command(&["seek", &value, "relative"]);
+        if let Err(err) = res {
+            tracing::warn!("mpv seek_relative ignored or failed: {err}");
+        }
+        Ok(())
     }
 
     pub fn set_volume(&self, volume: f64) -> Result<()> {
@@ -423,6 +468,16 @@ impl MpvClient {
         Ok(())
     }
 
+    pub fn set_video_track(&self, id: i64) -> Result<()> {
+        if id < 0 {
+            self.set_string("vid", "auto")?;
+        } else {
+            self.set_i64("vid", id)?;
+        }
+        self.emit_tracks();
+        Ok(())
+    }
+
     pub fn set_audio_track(&self, id: i64) -> Result<()> {
         self.set_i64("aid", id)?;
         self.emit_tracks();
@@ -459,6 +514,25 @@ impl MpvClient {
     /// Used for `glsl-shaders` when the AI Enhance toggle is switched.
     pub fn set_string_property(&self, name: &str, value: &str) -> Result<()> {
         self.set_string(name, value)
+    }
+
+    /// Set a numeric mpv property (brightness, contrast, saturation, gamma, …).
+    pub fn set_i64_property(&self, name: &str, value: i64) -> Result<()> {
+        self.set_i64(name, value)
+    }
+
+    pub fn get_string_property(&self, name: &str) -> Option<String> {
+        self.get_string(name)
+    }
+
+    /// Capture the current video frame to `path` in the requested image format.
+    /// The user's screenshot-format preference is restored even if capture fails.
+    pub fn capture_frame(&self, path: &std::path::Path, format: &str) -> Result<()> {
+        let previous = self.get_string("screenshot-format").unwrap_or_else(|| "png".into());
+        self.set_string("screenshot-format", format)?;
+        let result = self.command(&["screenshot-to-file", &path.to_string_lossy(), "video"]);
+        let _ = self.set_string("screenshot-format", &previous);
+        result
     }
 
     pub fn screenshot(&self) -> Result<String> {
@@ -576,6 +650,24 @@ impl MpvClient {
             self.set_f64("sub-delay", settings.subtitle_delay_ms as f64 / 1000.0)?;
         }
 
+        if should_apply_all
+            || previous
+                .map(|p| {
+                    p.video_brightness != settings.video_brightness
+                        || p.video_contrast != settings.video_contrast
+                        || p.video_saturation != settings.video_saturation
+                        || p.video_gamma != settings.video_gamma
+                })
+                .unwrap_or(false)
+        {
+            // These properties only exist while a video track is active, so a
+            // failed set must not abort the rest of settings application.
+            let _ = self.set_i64("brightness", settings.video_brightness);
+            let _ = self.set_i64("contrast", settings.video_contrast);
+            let _ = self.set_i64("saturation", settings.video_saturation);
+            let _ = self.set_i64("gamma", settings.video_gamma);
+        }
+
         Ok(())
     }
 
@@ -635,7 +727,10 @@ impl MpvClient {
         snapshot.video_width = self.get_i64_opt("video-params/w").unwrap_or(0);
         snapshot.video_height = self.get_i64_opt("video-params/h").unwrap_or(0);
         if snapshot.current.is_some() {
-            snapshot.status = if self.get_bool("pause") {
+            let paused_for_cache = self.get_bool("paused-for-cache");
+            snapshot.status = if paused_for_cache {
+                PlayerStatus::Loading
+            } else if self.get_bool("pause") {
                 PlayerStatus::Paused
             } else {
                 PlayerStatus::Playing
@@ -649,37 +744,43 @@ impl MpvClient {
     }
 
     fn emit_tracks(&self) {
-        let (audio, subtitles, aid, sid) = {
-            let (audio, subtitles) = self.tracks();
+        let (video, audio, subtitles, vid, aid, sid) = {
+            let (video, audio, subtitles) = self.tracks();
             (
+                video,
                 audio,
                 subtitles,
+                self.get_i64_opt("vid").unwrap_or(-1),
                 self.get_i64_opt("aid").unwrap_or(-1),
                 self.get_i64_opt("sid").unwrap_or(-1),
             )
         };
         {
             let mut snapshot = self.snapshot.write().unwrap();
+            snapshot.video_tracks = video.clone();
             snapshot.audio_tracks = audio.clone();
             snapshot.subtitle_tracks = subtitles.clone();
+            snapshot.active_video_track = vid;
             snapshot.active_audio_track = aid;
             snapshot.active_subtitle_track = sid;
         }
         let _ = self.app.emit(
             events::PLAYER_TRACKS,
             serde_json::json!({
+                "videoTracks": video,
                 "audioTracks": audio,
                 "subtitleTracks": subtitles,
+                "activeVideoTrack": vid,
                 "activeAudioTrack": aid,
                 "activeSubtitleTrack": sid,
             }),
         );
     }
 
-    fn tracks(&self) -> (Vec<MediaTrack>, Vec<MediaTrack>) {
+    fn tracks(&self) -> (Vec<MediaTrack>, Vec<MediaTrack>, Vec<MediaTrack>) {
         let name = match Self::cstring("track-list") {
             Ok(name) => name,
-            Err(_) => return (Vec::new(), Vec::new()),
+            Err(_) => return (Vec::new(), Vec::new(), Vec::new()),
         };
         let mut node: MpvNode = unsafe { std::mem::zeroed() };
         let code = unsafe {
@@ -691,9 +792,10 @@ impl MpvClient {
             )
         };
         if code < 0 || node.format != MPV_FORMAT_NODE_ARRAY {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), Vec::new());
         }
 
+        let mut video = Vec::new();
         let mut audio = Vec::new();
         let mut subtitles = Vec::new();
         unsafe {
@@ -704,18 +806,50 @@ impl MpvClient {
                     continue;
                 }
                 let kind = node_string(item, "type").unwrap_or_default();
-                if kind != "audio" && kind != "sub" {
+                if kind != "video" && kind != "audio" && kind != "sub" {
                     continue;
                 }
                 let track = MediaTrack {
                     id: node_i64(item, "id").unwrap_or(-1),
-                    name: node_string(item, "title")
-                        .or_else(|| node_string(item, "lang"))
-                        .unwrap_or_else(|| format!("Track {}", index + 1)),
+                    name: if kind == "video" {
+                        let w = node_i64(item, "demux-w").unwrap_or(0);
+                        let h = node_i64(item, "demux-h").unwrap_or(0);
+                        let fps = node_i64(item, "demux-fps").unwrap_or(0);
+                        let title = node_string(item, "title");
+                        if let Some(t) = title {
+                            if !t.trim().is_empty() {
+                                t
+                            } else if h > 0 {
+                                if fps > 30 {
+                                    format!("{}p{}", h, fps)
+                                } else {
+                                    format!("{}p", h)
+                                }
+                            } else {
+                                format!("Track {}", index + 1)
+                            }
+                        } else if h > 0 {
+                            if fps > 30 {
+                                format!("{}p{}", h, fps)
+                            } else if w > 0 {
+                                format!("{}p ({}x{})", h, w, h)
+                            } else {
+                                format!("{}p", h)
+                            }
+                        } else {
+                            format!("Track {}", index + 1)
+                        }
+                    } else {
+                        node_string(item, "title")
+                            .or_else(|| node_string(item, "lang"))
+                            .unwrap_or_else(|| format!("Track {}", index + 1))
+                    },
                     language: node_string(item, "lang"),
                     selected: node_bool(item, "selected").unwrap_or(false),
                 };
-                if kind == "audio" {
+                if kind == "video" {
+                    video.push(track);
+                } else if kind == "audio" {
                     audio.push(track);
                 } else {
                     subtitles.push(track);
@@ -723,7 +857,7 @@ impl MpvClient {
             }
             (self.ffi.free_node_contents)(&mut node);
         }
-        (audio, subtitles)
+        (video, audio, subtitles)
     }
 
     fn start_event_loop(self: &Arc<Self>) {
@@ -798,7 +932,7 @@ impl MpvClient {
                         if matches!(
                             name.as_str(),
                             "pause" | "volume" | "mute" | "speed" | "duration" | "aid"
-                                | "sid" | "fullscreen"
+                                | "sid" | "fullscreen" | "paused-for-cache"
                         ) {
                             self.refresh_snapshot();
                             self.emit_state();

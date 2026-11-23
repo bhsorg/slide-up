@@ -8,6 +8,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const settings = ref<AppSettings>(defaultSettings());
   const loaded = ref(false);
   const saving = ref(false);
+  const activeTab = ref<string>("appearance");
 
   const theme = computed<Theme>(() => settings.value.theme);
   const shortcuts = computed<Shortcuts>(() => settings.value.shortcuts);
@@ -78,6 +79,7 @@ export const useSettingsStore = defineStore("settings", () => {
     settings,
     loaded,
     saving,
+    activeTab,
     theme,
     shortcuts,
     load,

@@ -5,7 +5,7 @@
 
 use crate::error::{AppError, ErrorKind, Result};
 use crate::events;
-use crate::onnx_caption_engine::OnnxCaptionEngine;
+use crate::onnx_caption_engine::{CaptionDevice, OnnxCaptionEngine};
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -59,13 +59,14 @@ pub struct ModelManager {
     model_path: PathBuf,
     tokens_path: PathBuf,
     engine: Arc<Mutex<Option<OnnxCaptionEngine>>>,
+    device: Arc<Mutex<CaptionDevice>>,
     active_provider: Arc<Mutex<String>>,
     cancellation: Arc<Mutex<Option<CancellationToken>>>,
     downloading: Arc<Mutex<bool>>,
 }
 
 impl ModelManager {
-    pub fn new(app: AppHandle, data_dir: &Path) -> Result<Self> {
+    pub fn new(app: AppHandle, data_dir: &Path, device: CaptionDevice) -> Result<Self> {
         let model_dir = data_dir.join("models").join("sense-voice");
         std::fs::create_dir_all(&model_dir)?;
         Ok(Self {
@@ -74,6 +75,7 @@ impl ModelManager {
             tokens_path: model_dir.join(TOKENS_FILE),
             model_dir,
             engine: Arc::new(Mutex::new(None)),
+            device: Arc::new(Mutex::new(device)),
             active_provider: Arc::new(Mutex::new("Not loaded".to_string())),
             cancellation: Arc::new(Mutex::new(None)),
             downloading: Arc::new(Mutex::new(false)),
@@ -299,13 +301,10 @@ impl ModelManager {
             }
             self.emit_progress(0, 0, if was_cancelled { "cancelled" } else { "error" });
         } else {
-            // Make the freshly downloaded model immediately usable.
-            let manager = self.clone();
-            if let Err(error) = tauri::async_runtime::spawn_blocking(move || manager.initialize_engine()).await {
-                tracing::warn!("Caption engine auto-load task failed: {error}");
-            }
-            // Only announce completion once the engine has finished loading, so
-            // the UI can show the final hardware badge immediately.
+            // The model files are ready, but the ONNX engine stays unloaded
+            // until the user explicitly asks for it (Settings → Live captions).
+            // Loading 230 MB of weights and DirectML at startup or after a
+            // download made the whole app and OS stutter.
             let total: u64 = [&self.model_path, &self.tokens_path]
                 .iter()
                 .filter_map(|path| std::fs::metadata(path).ok().map(|meta| meta.len()))
@@ -420,9 +419,14 @@ impl ModelManager {
             .map_err(|message| AppError::new(ErrorKind::Native, message))
     }
 
-    /// Probe GPU providers in platform-specific order, falling back to CPU.
-    /// With the bundled CPU-only ORT library the GPU attempt fails and CPU is
-    /// selected; a DirectML/CUDA-enabled library is picked up automatically.
+    /// Shared ONNX Runtime initialization for other inference features.
+    pub fn ensure_ort(&self) -> Result<()> {
+        self.ensure_ort_initialized()
+    }
+
+    /// Initialize the caption engine using the configured device preference.
+    /// `Auto` prefers the platform's GPU provider with a CPU fallback, while
+    /// `Cpu` / `Gpu` force one and report a clear error if it is unavailable.
     pub fn initialize_engine(&self) -> Result<String> {
         if !self.model_files_ready() {
             return Err(AppError::new(
@@ -432,11 +436,13 @@ impl ModelManager {
         }
         self.ensure_ort_initialized()?;
 
-        // The engine loads the Silero VAD session and the SenseVoice session,
-        // probing the platform's GPU provider and falling back to a
-        // thread-limited CPU session. It can panic inside ort's C bindings, so
-        // catch that here and surface a user-facing error instead.
-        let engine = catch_unwind(AssertUnwindSafe(|| OnnxCaptionEngine::new(&self.model_dir)))
+        let device = *self.device.lock().map_err(|_| {
+            AppError::new(ErrorKind::Native, "Caption device preference is unavailable.")
+        })?;
+
+        // ONNX Runtime's C bindings can panic on provider setup, so catch that
+        // here and surface a user-facing error instead.
+        let engine = catch_unwind(AssertUnwindSafe(|| OnnxCaptionEngine::new(&self.model_dir, device)))
             .map_err(|_| {
                 AppError::new(
                     ErrorKind::Native,
@@ -459,6 +465,33 @@ impl ModelManager {
         })? = label.clone();
         tracing::info!("Caption engine initialized on {label}");
         Ok(label)
+    }
+
+    /// Change the preferred execution provider. If a session is already live it
+    /// is rebuilt immediately so the hardware badge reflects the new setting.
+    pub fn set_device(&self, device: CaptionDevice) -> Result<String> {
+        *self.device.lock().map_err(|_| {
+            AppError::new(ErrorKind::Native, "Caption device preference is unavailable.")
+        })? = device;
+
+        if self.status().is_loaded {
+            self.initialize_engine()
+        } else {
+            Ok("Not loaded".to_string())
+        }
+    }
+
+    /// Drop the live ONNX session so its weights and GPU allocations are freed.
+    /// The model files stay on disk and can be loaded again at any time.
+    pub fn unload_engine(&self) -> Result<()> {
+        *self.engine.lock().map_err(|_| {
+            AppError::new(ErrorKind::Native, "Caption engine lock is unavailable.")
+        })? = None;
+        *self.active_provider.lock().map_err(|_| {
+            AppError::new(ErrorKind::Native, "Caption engine lock is unavailable.")
+        })? = "Not loaded".to_string();
+        tracing::info!("Caption engine unloaded");
+        Ok(())
     }
 
     pub fn delete(&self) -> Result<()> {
@@ -511,6 +544,21 @@ pub async fn load_caption_engine(manager: State<'_, ModelManager>) -> Result<Str
 }
 
 #[tauri::command]
+pub fn unload_caption_engine(manager: State<'_, ModelManager>) -> Result<()> {
+    manager.unload_engine()
+}
+
+#[tauri::command]
 pub fn delete_caption_model(manager: State<'_, ModelManager>) -> Result<()> {
     manager.delete()
+}
+
+#[tauri::command]
+pub async fn set_caption_device(manager: State<'_, ModelManager>, device: String) -> Result<String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.set_device(CaptionDevice::parse(&device)))
+        .await
+        .map_err(|error| {
+            AppError::new(ErrorKind::Native, format!("Caption device change failed: {error}"))
+        })?
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { Play, Heart, ListPlus, Clapperboard, Music2, Plus, ListMusic, MoreVertical, Trash2, Film, Captions, Info, Check, X } from "@lucide/vue";
+import { computed, ref, watch } from "vue";
+import { Play, Heart, ListPlus, Clapperboard, Music2, Plus, ListMusic, MoreVertical, Trash2, Film, Captions, Info, Check, X, User } from "@lucide/vue";
 import type { MediaItem } from "../types/media";
 import { formatDuration } from "../types/media";
 import { useLibraryStore } from "../stores/library";
@@ -8,17 +8,24 @@ import { usePlayerStore } from "../stores/player";
 import { useToast } from "../composables/useToast";
 import { usePlaylistPicker } from "../composables/usePlaylistPicker";
 import { useMediaProperties } from "../composables/useMediaProperties";
+import { useArtistBio } from "../composables/useArtistBio";
 import { useStoryboardTask } from "../composables/useStoryboardTask";
-import { api } from "../services/tauri";
+import { useSubtitleAvailability } from "../composables/useSubtitleAvailability";
 import ContextMenu from "./ContextMenu.vue";
 import AppLogo from "./AppLogo.vue";
 import type { ContextMenuItem } from "../types/contextMenu";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   items: MediaItem[];
   contextName?: string;
   mode?: "grid" | "list";
-}>();
+  selectable?: boolean;
+  removeType?: "library" | "recent" | "favorites" | "none";
+}>(), {
+  mode: "grid",
+  selectable: true,
+  removeType: "library",
+});
 const emit = defineEmits<{ play: [items: MediaItem[], index: number] }>();
 
 const library = useLibraryStore();
@@ -26,9 +33,21 @@ const player = usePlayerStore();
 const toast = useToast();
 const picker = usePlaylistPicker();
 const properties = useMediaProperties();
+const { showArtist } = useArtistBio();
 const storyboard = useStoryboardTask();
+const subtitles = useSubtitleAvailability();
 
 const title = computed(() => props.contextName ?? "Media");
+
+// Resolve subtitle availability for every visible video so cards can show a CC
+// badge. Results are cached by the composable across views and re-renders.
+watch(() => props.items, (items) => {
+  void subtitles.checkMany(items);
+}, { immediate: true });
+
+function hasCaption(item: MediaItem): boolean {
+  return item.kind === "video" && subtitles.has(item.id);
+}
 
 function playAt(index: number) {
   emit("play", props.items, index);
@@ -102,6 +121,39 @@ async function queueSelected() {
   }
 }
 
+async function removeSelected() {
+  const items = selectedItems.value;
+  if (!items.length) return;
+  const ids = items.map((item) => item.id);
+
+  if (props.removeType === "recent") {
+    try {
+      await library.removeFromRecent(ids);
+      toast.success(`Removed ${items.length} item${items.length === 1 ? "" : "s"} from recent history.`);
+      clearSelection();
+    } catch (error) {
+      toast.error(String(error), "Could not remove items from recent history");
+    }
+  } else if (props.removeType === "favorites") {
+    try {
+      await library.removeFavorites(ids);
+      toast.success(`Removed ${items.length} item${items.length === 1 ? "" : "s"} from favorites.`);
+      clearSelection();
+    } catch (error) {
+      toast.error(String(error), "Could not remove items from favorites");
+    }
+  } else if (props.removeType === "library") {
+    if (!window.confirm(`Remove ${items.length} item${items.length === 1 ? "" : "s"} from the library? Files on disk will not be deleted.`)) return;
+    try {
+      await library.removeMany(ids);
+      toast.success(`Removed ${items.length} item${items.length === 1 ? "" : "s"} from the library.`);
+      clearSelection();
+    } catch (error) {
+      toast.error(String(error), "Could not remove items from library");
+    }
+  }
+}
+
 const menu = ref<{ x: number; y: number; index: number } | null>(null);
 const subtitleAvailable = ref(false);
 
@@ -113,9 +165,10 @@ function openMenu(event: MouseEvent, index: number) {
   const item = props.items[index];
   if (item?.kind === "video") {
     void storyboard.check(item.id);
-    void api.hasSubtitle(item.id).then((value) => {
+    subtitleAvailable.value = subtitles.get(item.id) ?? false;
+    void subtitles.check(item.id).then((value) => {
       subtitleAvailable.value = value;
-    }).catch(() => undefined);
+    });
   }
 }
 
@@ -131,6 +184,10 @@ const menuDefinition = computed<{ items: ContextMenuItem[]; actions: string[] }>
     { label: "Properties…", icon: Info },
   ];
   const actions = ["play", "favorite", "next", "queue", "playlist", "properties"];
+  if (item.artist && !/unknown|various/i.test(item.artist)) {
+    items.push({ label: `About ${item.artist}…`, icon: User });
+    actions.push("artist");
+  }
   if (item.kind === "video") {
     const task = storyboard.status(item.id);
     if (task) {
@@ -143,10 +200,20 @@ const menuDefinition = computed<{ items: ContextMenuItem[]; actions: string[] }>
     items.push({ label: "Load subtitle file…", icon: Captions, disabled: subtitleAvailable.value });
     actions.push("subtitle");
   }
-  items.push({ label: "", separator: true });
-  actions.push("separator");
-  items.push({ label: "Remove from library", icon: Trash2, danger: true });
-  actions.push("remove");
+  if (props.removeType !== "none") {
+    items.push({ label: "", separator: true });
+    actions.push("separator");
+    if (props.removeType === "recent") {
+      items.push({ label: "Remove from history", icon: Trash2, danger: true });
+      actions.push("remove-recent");
+    } else if (props.removeType === "favorites") {
+      items.push({ label: "Remove from favorites", icon: Trash2, danger: true });
+      actions.push("remove-favorite");
+    } else {
+      items.push({ label: "Remove from library", icon: Trash2, danger: true });
+      actions.push("remove");
+    }
+  }
   return { items, actions };
 });
 
@@ -180,6 +247,9 @@ async function onMenuSelect(index: number) {
     case "properties":
       properties.showProperties(item);
       break;
+    case "artist":
+      if (item.artist) void showArtist(item.artist);
+      break;
     case "storyboard":
       try {
         await storyboard.generate(item.id);
@@ -191,6 +261,22 @@ async function onMenuSelect(index: number) {
       break;
     case "subtitle":
       await player.openSubtitle();
+      break;
+    case "remove-recent":
+      try {
+        await library.removeFromRecent([item.id]);
+        toast.info(`Removed “${item.title}” from history.`);
+      } catch (error) {
+        toast.error(String(error), "Could not remove item");
+      }
+      break;
+    case "remove-favorite":
+      try {
+        await library.toggleFavorite(item);
+        toast.info(`Removed “${item.title}” from favorites.`);
+      } catch (error) {
+        toast.error(String(error), "Could not remove item");
+      }
       break;
     case "remove":
       try {
@@ -209,7 +295,7 @@ async function onMenuSelect(index: number) {
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-semibold text-ink">{{ title }}</h2>
       <div class="flex items-center gap-3">
-        <label class="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted hover:text-ink" title="Select all items">
+        <label v-if="selectable" class="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted hover:text-ink" title="Select all items">
           <input
             type="checkbox"
             class="h-3.5 w-3.5 cursor-pointer accent-purple"
@@ -224,7 +310,7 @@ async function onMenuSelect(index: number) {
     </div>
 
     <div
-      v-if="selectedItems.length"
+      v-if="selectable && selectedItems.length"
       class="sticky top-2 z-30 flex items-center gap-2 rounded-xl border border-line-strong bg-elevated/95 px-3 py-2 shadow-[var(--shadow-panel)] backdrop-blur"
     >
       <span class="mr-1 text-xs font-medium text-ink">{{ selectedItems.length }} selected</span>
@@ -245,6 +331,16 @@ async function onMenuSelect(index: number) {
         <ListPlus :size="13" /> Add to queue
       </button>
       <button
+        v-if="removeType !== 'none'"
+        type="button"
+        class="flex h-7 items-center gap-1.5 rounded-lg bg-[#ff5b8d]/15 px-2.5 text-[11px] font-medium text-[#ff5b8d] hover:bg-[#ff5b8d]/25 transition-colors"
+        :title="removeType === 'recent' ? 'Remove from history' : removeType === 'favorites' ? 'Remove from favorites' : 'Remove from library'"
+        @click="removeSelected"
+      >
+        <Trash2 :size="13" />
+        <span>{{ removeType === 'recent' ? 'Remove from history' : removeType === 'favorites' ? 'Remove from favorites' : 'Remove from library' }}</span>
+      </button>
+      <button
         type="button"
         class="ml-auto flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] text-muted hover:bg-active hover:text-ink"
         title="Clear selection"
@@ -263,6 +359,7 @@ async function onMenuSelect(index: number) {
         @contextmenu.prevent="openMenu($event, index)"
       >
         <button
+          v-if="selectable"
           type="button"
           class="absolute left-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full border transition-all"
           :class="selectedIds.has(item.id)
@@ -287,6 +384,13 @@ async function onMenuSelect(index: number) {
               <AppLogo v-else class="h-16 w-16 opacity-80" />
             </div>
             <div class="absolute inset-0 bg-black/25 opacity-0 transition-opacity group-hover:opacity-100" />
+            <span
+              v-if="hasCaption(item)"
+              class="absolute bottom-2 left-2 flex items-center gap-0.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white/90 backdrop-blur"
+              title="Subtitles available"
+            >
+              <Captions :size="11" :stroke-width="2.2" /> CC
+            </span>
             <span class="absolute bottom-2 right-2 rounded-md bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white/90">
               {{ formatDuration(item.durationMs) }}
             </span>
@@ -324,8 +428,11 @@ async function onMenuSelect(index: number) {
 
     <template v-else>
       <div class="su-panel overflow-hidden">
-        <div class="hidden grid-cols-[18px_40px_minmax(0,1.6fr)_minmax(0,1fr)_80px_112px] gap-3 border-b border-line px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-faint sm:grid">
-          <span></span>
+        <div
+          class="hidden gap-3 border-b border-line px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-faint sm:grid"
+          :class="selectable ? 'grid-cols-[18px_40px_minmax(0,1.6fr)_minmax(0,1fr)_80px_112px]' : 'grid-cols-[40px_minmax(0,1.6fr)_minmax(0,1fr)_80px_112px]'"
+        >
+          <span v-if="selectable"></span>
           <span></span>
           <span>Title</span>
           <span>Artist / Album</span>
@@ -335,10 +442,14 @@ async function onMenuSelect(index: number) {
         <div
           v-for="(item, index) in items"
           :key="item.id"
-          class="group relative grid grid-cols-[18px_40px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line/60 px-3 py-2 transition-colors last:border-b-0 hover:bg-hover/60 sm:grid-cols-[18px_40px_minmax(0,1.6fr)_minmax(0,1fr)_80px_112px]"
+          class="group relative items-center gap-3 border-b border-line/60 px-3 py-2 transition-colors last:border-b-0 hover:bg-hover/60"
+          :class="selectable
+            ? 'grid grid-cols-[18px_40px_minmax(0,1fr)_auto] sm:grid-cols-[18px_40px_minmax(0,1.6fr)_minmax(0,1fr)_80px_112px]'
+            : 'grid grid-cols-[40px_minmax(0,1fr)_auto] sm:grid-cols-[40px_minmax(0,1.6fr)_minmax(0,1fr)_80px_112px]'"
           @contextmenu.prevent="openMenu($event, index)"
         >
           <button
+            v-if="selectable"
             type="button"
             class="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border transition-all"
             :class="selectedIds.has(item.id)
@@ -367,7 +478,14 @@ async function onMenuSelect(index: number) {
           </button>
 
           <button type="button" class="min-w-0 text-left" @click="playAt(index)">
-            <div class="truncate text-[12px] font-medium text-ink">{{ item.title }}</div>
+            <div class="flex min-w-0 items-center gap-1.5">
+              <span class="truncate text-[12px] font-medium text-ink">{{ item.title }}</span>
+              <span
+                v-if="hasCaption(item)"
+                class="shrink-0 rounded bg-purple/20 px-1 text-[9px] font-bold leading-4 text-purple"
+                title="Subtitles available"
+              >CC</span>
+            </div>
             <div class="truncate text-[10px] text-faint sm:hidden">{{ item.artist || (item.kind === 'video' ? 'Video' : 'Unknown artist') }} · {{ formatDuration(item.durationMs) }}</div>
           </button>
 

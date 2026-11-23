@@ -69,7 +69,9 @@ Settings → AI upscaling lists SPAN x2/x4, Real-ESRGAN Compact, ESPCN x2/x4 and
 - Real-ESRGAN Compact — `realesr-general-x4v3.onnx`, 4,866,417 bytes, from `huggingface.co/CoderViking/realesr-general-x4v3-onnx`.
 - FSRCNNX x2 — `FSRCNNX_x2_8-0-4-1.glsl`, 71,296 bytes, from the `igv/FSRCNN-TensorFlow` 1.1 GitHub release.
 
-The SPAN and ESPCN entries are shown as a catalog with "Source URL needed" until verified URLs are supplied. Once the FSRCNNX shader is installed, the video player shows an **AI Enhance** button (top bar and right-click menu) that applies it at runtime via mpv's `glsl-shaders` property; toggling it off clears the property. ONNX upscaler models are not applied to playback yet.
+The SPAN and ESPCN entries are shown as a catalog with "Source URL needed" until verified URLs are supplied. Once the FSRCNNX shader is installed, the video player shows an **AI Enhance** button (top bar and right-click menu) that applies it at runtime via mpv's `glsl-shaders` property; toggling it off clears the property.
+
+Once Real-ESRGAN Compact is downloaded, the video player also shows an **Upscale Video** button (top bar and right-click menu). It runs a fully offline batch upscale: ffmpeg decodes raw RGB frames, the ONNX model upscales each frame 4x with ONNX Runtime, and ffmpeg re-encodes to `app_data_dir/upscaled/<name>-realesrgan.mp4` with the original audio copied. Progress is emitted as `upscale-progress`, and the work runs off the UI thread. **ffmpeg and ffprobe must be installed and on PATH** — they are not bundled, and the command reports a clear error if missing. This is separate from the live FSRCNNX shader toggle; the other ONNX models are not applied to playback.
 
 ## Notes
 

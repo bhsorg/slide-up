@@ -173,6 +173,22 @@ impl Repository {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    pub fn clear_recent(conn: &Connection) -> Result<()> {
+        conn.execute(
+            "UPDATE media SET last_played_at = NULL WHERE last_played_at IS NOT NULL",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_from_recent(conn: &Connection, id: i64) -> Result<()> {
+        conn.execute(
+            "UPDATE media SET last_played_at = NULL WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
     pub fn set_favorite(conn: &Connection, id: i64, favorite: bool) -> Result<()> {
         conn.execute(
             "UPDATE media SET favorite = ?2 WHERE id = ?1",

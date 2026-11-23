@@ -13,10 +13,13 @@ mod models;
 mod mpv;
 mod state;
 mod upscaler_manager;
+#[cfg(windows)]
+mod taskbar;
 
 use db::schema;
 use db::Repository;
 use models::AppSettings;
+use onnx_caption_engine::CaptionDevice;
 use state::AppState;
 use std::fs;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -49,7 +52,8 @@ pub fn run() {
             let mpv = mpv::MpvClient::new(app.handle().clone(), &data_dir)?;
             // Offline caption model lifecycle. Managed so every command shares
             // one ONNX session and one download cancellation token.
-            let models = model_manager::ModelManager::new(app.handle().clone(), &data_dir)?;
+            let caption_device = CaptionDevice::parse(&settings.caption_device);
+            let models = model_manager::ModelManager::new(app.handle().clone(), &data_dir, caption_device)?;
             let upscalers = upscaler_manager::UpscalerManager::new(app.handle().clone(), &data_dir)?;
             let state = AppState::new(
                 app.handle().clone(),
@@ -62,14 +66,10 @@ pub fn run() {
 
             app.manage(models.clone());
             app.manage(upscalers.clone());
-            if models.model_files_ready() {
-                let startup_models = models.clone();
-                std::thread::spawn(move || {
-                    if let Err(error) = startup_models.initialize_engine() {
-                        tracing::warn!("Could not auto-load the caption engine: {error}");
-                    }
-                });
-            }
+
+            // The SenseVoice/ONNX engine is intentionally NOT loaded here.
+            // It is only initialized from the explicit "Load engine" action in
+            // Settings → Live captions, keeping startup and the OS responsive.
 
             let startup = state.settings.lock().unwrap().clone();
 
@@ -110,6 +110,9 @@ pub fn run() {
                 })
                 .on_menu_event(move |app, event| {
                     if event.id() == "tray_quit" {
+                        for (_, window) in app.webview_windows() {
+                            let _ = window.destroy();
+                        }
                         app.exit(0);
                         return;
                     }
@@ -141,14 +144,28 @@ pub fn run() {
                 .build(app)?;
             app.manage(tray);
 
-            // Close button hides to the tray; use the tray Quit item to exit.
+            // Window close handling and Windows taskbar buttons
             let close_handle = app.handle().clone();
+            let close_state = state.clone();
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(windows)]
+                taskbar::setup_taskbar_buttons(&window);
+
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        if let Some(window) = close_handle.get_webview_window("main") {
-                            let _ = window.hide();
+                        let settings = close_state.settings.lock().unwrap().clone();
+                        let is_playing = close_state.mpv.snapshot().status == models::PlayerStatus::Playing;
+
+                        if settings.taskbar_controls && is_playing {
+                            api.prevent_close();
+                            if let Some(window) = close_handle.get_webview_window("main") {
+                                let _ = window.minimize();
+                            }
+                        } else if settings.minimize_to_tray {
+                            api.prevent_close();
+                            if let Some(window) = close_handle.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
                         }
                     }
                 });
@@ -157,6 +174,10 @@ pub fn run() {
             if startup.start_minimized {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
+                }
+            } else {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
                 }
             }
 
@@ -208,6 +229,7 @@ pub fn run() {
             commands::app::app_version,
             commands::app::open_external,
             commands::app::show_in_folder,
+            commands::app::fetch_url_text,
             commands::associations::get_file_associations,
             commands::associations::register_file_associations,
             commands::associations::unregister_file_associations,
@@ -218,6 +240,8 @@ pub fn run() {
             model_manager::download_caption_model,
             model_manager::cancel_model_download,
             model_manager::load_caption_engine,
+            model_manager::unload_caption_engine,
+            model_manager::set_caption_device,
             model_manager::delete_caption_model,
             upscaler_manager::list_upscaler_models,
             upscaler_manager::download_upscaler_model,
@@ -227,6 +251,8 @@ pub fn run() {
             commands::library::pick_folder,
             commands::library::list_media,
             commands::library::get_recent,
+            commands::library::clear_recent,
+            commands::library::remove_from_recent,
             commands::library::get_media,
             commands::library::set_favorite,
             commands::library::delete_media,
@@ -238,6 +264,8 @@ pub fn run() {
             commands::library::generate_storyboard,
             commands::library::has_storyboard,
             commands::library::has_subtitle,
+            commands::lyrics::get_lyrics,
+            commands::lyrics::save_lyrics,
             commands::playback::get_snapshot,
             commands::playback::list_audio_devices,
             commands::playback::play_media,
@@ -259,6 +287,7 @@ pub fn run() {
             commands::playback::toggle_pip,
             commands::playback::is_pip,
             commands::playback::get_tracks,
+            commands::playback::set_video_track,
             commands::playback::set_audio_track,
             commands::playback::set_subtitle_track,
             commands::playback::add_subtitle,
@@ -266,6 +295,9 @@ pub fn run() {
             commands::playback::frame_step,
             commands::playback::set_aspect_ratio,
             commands::playback::set_ai_enhance,
+            commands::playback::set_video_filter,
+            commands::playback::auto_video_filters,
+            commands::upscale::upscale_video_with_realesrgan,
             commands::playback::screenshot,
             commands::playback::sync_video_rect,
             commands::playback::set_surface_visible,

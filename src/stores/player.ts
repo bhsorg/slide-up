@@ -2,28 +2,11 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { api, events, hasProgressShape, onEvent } from "../services/tauri";
 import type { MediaItem } from "../types/media";
+import { initialPlayerState } from "../types/player";
 import type { MediaTrack, PlayMode, PlayerState, PlayerStatus, TrackInfo } from "../types/player";
 import type { QueuePayload, TrackPayload } from "../services/tauri";
 
-const emptyState = (): PlayerState => ({
-  status: "stopped",
-  current: null,
-  positionMs: 0,
-  durationMs: 0,
-  volume: 0.8,
-  muted: false,
-  speed: 1,
-  shuffle: false,
-  repeat: "off",
-  fullscreen: false,
-  audioTracks: [],
-  subtitleTracks: [],
-  activeAudioTrack: -1,
-  activeSubtitleTrack: -1,
-  videoWidth: 0,
-  videoHeight: 0,
-  error: null,
-});
+const emptyState = (): PlayerState => initialPlayerState();
 
 export const usePlayerStore = defineStore("player", () => {
   const state = ref<PlayerState>(emptyState());
@@ -34,12 +17,27 @@ export const usePlayerStore = defineStore("player", () => {
   const isPip = ref(false);
   const aiEnhance = ref(false);
   const aiEnhanceAvailable = ref(false);
+  const realesrganAvailable = ref(false);
   const initialized = ref(false);
   const unlisteners: Array<() => void> = [];
 
   const isPlaying = computed(() => state.value.status === "playing");
   const isVideo = computed(() => state.value.current?.kind === "video");
   const hasTrack = computed(() => !!state.value.current);
+  const isLive = computed(() => {
+    const current = state.value.current;
+    if (!current) return false;
+    if (current.artist === "Live TV" || current.album === "Live TV") return true;
+    if (
+      current.durationMs === 0 &&
+      (current.path.startsWith("rtmp://") ||
+        current.path.startsWith("rtsp://") ||
+        (current.id && current.id < -1000))
+    ) {
+      return true;
+    }
+    return false;
+  });
   const progress = computed(() =>
     state.value.durationMs > 0 ? (state.value.positionMs / state.value.durationMs) * 100 : 0,
   );
@@ -55,8 +53,10 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   function applyTracks(payload: TrackPayload) {
+    if (payload.videoTracks) state.value.videoTracks = payload.videoTracks;
     state.value.audioTracks = payload.audioTracks;
     state.value.subtitleTracks = payload.subtitleTracks;
+    if (typeof payload.activeVideoTrack === "number") state.value.activeVideoTrack = payload.activeVideoTrack;
     state.value.activeAudioTrack = payload.activeAudioTrack;
     state.value.activeSubtitleTrack = payload.activeSubtitleTrack;
   }
@@ -175,12 +175,21 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   async function seek(ms: number) {
-    state.value.positionMs = Math.max(0, Math.min(ms, state.value.durationMs));
-    await api.seek(Math.round(state.value.positionMs));
+    const targetMs = state.value.durationMs > 0 ? Math.max(0, Math.min(ms, state.value.durationMs)) : Math.max(0, ms);
+    state.value.positionMs = targetMs;
+    try {
+      await api.seek(Math.round(targetMs));
+    } catch (e) {
+      console.warn("Seek error ignored:", e);
+    }
   }
 
   async function seekRelative(deltaMs: number) {
-    await api.seekRelative(deltaMs);
+    try {
+      await api.seekRelative(deltaMs);
+    } catch (e) {
+      console.warn("SeekRelative error ignored:", e);
+    }
   }
 
   async function setVolume(volume: number) {
@@ -229,6 +238,11 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
+  async function setVideoTrack(id: number) {
+    state.value.activeVideoTrack = id;
+    await api.setVideoTrack(id);
+  }
+
   async function setAudioTrack(id: number) {
     state.value.activeAudioTrack = id;
     await api.setAudioTrack(id);
@@ -262,17 +276,25 @@ export const usePlayerStore = defineStore("player", () => {
     return setAiEnhance(!aiEnhance.value);
   }
 
-  /** Reflect whether a shader is installed, clearing a stale enable if not. */
+  /** Reflect which offline upscaler assets are installed. */
   async function refreshAiEnhanceAvailability() {
     try {
       const models = await api.listUpscalerModels();
       aiEnhanceAvailable.value = models.some(
         (model) => model.kind === "shader" && model.isDownloaded,
       );
+      realesrganAvailable.value = models.some(
+        (model) => model.id === "realesr-general-x4v3" && model.isDownloaded,
+      );
       if (!aiEnhanceAvailable.value && aiEnhance.value) await setAiEnhance(false);
     } catch {
       aiEnhanceAvailable.value = false;
+      realesrganAvailable.value = false;
     }
+  }
+
+  async function upscaleVideo(path: string) {
+    return api.upscaleVideoWithRealEsrgan(path);
   }
 
   async function screenshot() {
@@ -321,6 +343,7 @@ export const usePlayerStore = defineStore("player", () => {
     isPlaying,
     isVideo,
     hasTrack,
+    isLive,
     progress,
     initialize,
     dispose,
@@ -345,9 +368,12 @@ export const usePlayerStore = defineStore("player", () => {
     togglePip,
     aiEnhance,
     aiEnhanceAvailable,
+    realesrganAvailable,
     setAiEnhance,
     toggleAiEnhance,
     refreshAiEnhanceAvailability,
+    upscaleVideo,
+    setVideoTrack,
     setAudioTrack,
     setSubtitleTrack,
     openSubtitle,

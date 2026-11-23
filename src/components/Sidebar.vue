@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { House, Music2, Clapperboard, ListMusic, Heart, History, Settings, ChevronRight } from "@lucide/vue";
+import { House, Tv, Music2, Clapperboard, ListMusic, Heart, History, ChevronRight } from "@lucide/vue";
 import type { ViewId } from "../types/settings";
 
 defineProps<{ active: ViewId }>();
-const emit = defineEmits<{ navigate: [view: ViewId] }>();
+const emit = defineEmits<{ navigate: [view: ViewId | "player"] }>();
 
 const navItems: Array<{ id: ViewId; label: string; icon: typeof House }> = [
   { id: "home", label: "Home", icon: House },
+  { id: "tv", label: "Live TV", icon: Tv },
   { id: "music", label: "Music Library", icon: Music2 },
   { id: "videos", label: "Video Library", icon: Clapperboard },
   { id: "playlists", label: "Playlists", icon: ListMusic },
   { id: "favorites", label: "Favorites", icon: Heart },
   { id: "recent", label: "Recently Played", icon: History },
-  { id: "settings", label: "Settings", icon: Settings },
 ];
 
 const quickAccess: Array<{ id: ViewId; label: string; hint: string; icon: typeof House; color: string }> = [
@@ -67,9 +67,14 @@ const quickAccess: Array<{ id: ViewId; label: string; hint: string; icon: typeof
       </div>
     </div>
 
-    <!-- Sidebar Footer with blended guitar.png -->
+    <!-- Sidebar Footer with blended guitar.png & mini-video container -->
     <div class="sidebar-footer">
-      <div id="mini-video-anchor" class="sidebar-guitar-card">
+      <div
+        id="mini-video-anchor"
+        class="sidebar-guitar-card cursor-pointer"
+        title="Click to expand player"
+        @click="emit('navigate', 'player')"
+      >
         <img
           src="/guitar.png"
           alt="Guitar"

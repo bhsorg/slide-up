@@ -152,6 +152,10 @@ impl PlayerStatus {
     }
 }
 
+const fn default_active_track() -> i64 {
+    -1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerSnapshot {
@@ -167,8 +171,12 @@ pub struct PlayerSnapshot {
     pub fullscreen: bool,
     pub audio_tracks: Vec<MediaTrack>,
     pub subtitle_tracks: Vec<MediaTrack>,
+    #[serde(default)]
+    pub video_tracks: Vec<MediaTrack>,
     pub active_audio_track: i64,
     pub active_subtitle_track: i64,
+    #[serde(default = "default_active_track")]
+    pub active_video_track: i64,
     pub video_width: i64,
     pub video_height: i64,
     pub error: Option<String>,
@@ -240,6 +248,21 @@ pub struct AppSettings {
     pub custom_extensions: Vec<CustomExtension>,
     #[serde(default)]
     pub live_captions_enabled: bool,
+    /// "auto" | "cpu" | "gpu" — SenseVoice execution provider preference.
+    #[serde(default)]
+    pub caption_device: String,
+    #[serde(default)]
+    pub video_brightness: i64,
+    #[serde(default)]
+    pub video_contrast: i64,
+    #[serde(default)]
+    pub video_saturation: i64,
+    #[serde(default)]
+    pub video_gamma: i64,
+    #[serde(default)]
+    pub transparent_filter_dialog: bool,
+    #[serde(default)]
+    pub taskbar_controls: bool,
     pub shortcuts: Shortcuts,
 }
 
@@ -309,6 +332,13 @@ impl Default for AppSettings {
             minimize_to_tray: false,
             custom_extensions: Vec::new(),
             live_captions_enabled: false,
+            caption_device: "auto".into(),
+            video_brightness: 0,
+            video_contrast: 0,
+            video_saturation: 0,
+            video_gamma: 0,
+            transparent_filter_dialog: false,
+            taskbar_controls: false,
             shortcuts: Shortcuts {
                 play_pause: "Space".into(),
                 seek_back: "ArrowLeft".into(),
