@@ -2,7 +2,9 @@
 
 <div align="center">
 
-![Slide Up Logo](public/app-icon.svg)
+<img src="public/slideup.png" width="96" height="96" alt="Slide Up Logo" />
+
+<br />
 
 **A high-performance, modern desktop media player built with Tauri 2, Rust, Vue 3, and bundled libmpv.**
 
@@ -12,9 +14,13 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6.svg?logo=typescript)](https://www.typescriptlang.org/)
 [![libmpv](https://img.shields.io/badge/Engine-libmpv--2-red.svg)](https://mpv.io/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4.0-38B2AC.svg?logo=tailwindcss)](https://tailwindcss.com/)
-[![License](https://img.shields.io/badge/License-Proprietary%20%2F%20Private-purple.svg)]()
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 [Features](#key-features) • [Architecture](#architecture) • [Keyboard Shortcuts](#default-keyboard-shortcuts) • [Installation & Development](#installation--development) • [AI Features](#ai-features)
+
+<br /><br />
+
+![Slide Up Desktop](screenshots/slideup.png)
 
 </div>
 

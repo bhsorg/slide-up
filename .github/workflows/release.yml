@@ -2,11 +2,13 @@ name: Release
 
 on:
   push:
-    branches:
-      - release
     tags:
       - 'v*'
   workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -22,6 +24,14 @@ jobs:
         with:
           lfs: true
 
+      - name: Cache Git LFS
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: ${{ runner.os }}-lfs-${{ hashFiles('resources/**', 'binaries/**', '.gitattributes') }}
+          restore-keys: |
+            ${{ runner.os }}-lfs-
+
       - name: Checkout LFS objects
         run: git lfs checkout
 
@@ -36,10 +46,11 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Rust cache
+      - name: Rust Cache (Crates & Target Build)
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: './src-tauri -> src-tauri/target'
+          cache-on-failure: false
 
       - name: Install Frontend Dependencies
         run: npm ci
