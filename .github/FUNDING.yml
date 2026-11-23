@@ -1,0 +1,7 @@
+# GitHub Funding Configuration for Slide Up
+# Enables the native "Sponsor" button on GitHub repository
+
+buy_me_a_coffee: hinditutorpoint
+custom:
+  - https://buymeacoffee.com/hinditutorpoint
+  - https://bloghindisupport.com
