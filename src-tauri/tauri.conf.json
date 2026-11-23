@@ -29,14 +29,22 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**", "$RESOURCE/**", "$TEMP/**"]
+        "scope": [
+          "$APPDATA/**",
+          "$RESOURCE/**",
+          "$TEMP/**"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["resources/libmpv-2.dll", "resources/vulkan-1.dll", "binaries/onnxruntime.dll"],
+    "resources": [
+      "resources/libmpv-2.dll",
+      "resources/vulkan-1.dll",
+      "binaries/onnxruntime.dll"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,5 +52,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1ODVENEYxQjYwNzFDRUMKUldUc0hBZTI4ZFNGMWJkbDZlL0ZwK2tVOXhMRUwyZWliSkRaS2RlWFlwMnplUFprVVNhUS80QVEK",
+      "endpoints": [
+        "https://github.com/bhsorg/slide-up/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

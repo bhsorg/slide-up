@@ -19,6 +19,8 @@
     "core:webview:allow-set-webview-background-color",
     "opener:default",
     "dialog:default",
-    "global-shortcut:default"
+    "global-shortcut:default",
+    "updater:default",
+    "process:default"
   ]
 }

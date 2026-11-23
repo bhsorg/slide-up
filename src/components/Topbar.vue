@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "../services/tauri";
 import AppLogo from "./AppLogo.vue";
-import { Search, Sun, Moon, Minus, Square, X, X as ClearIcon, Settings, RefreshCw, Info, Mic, MicOff } from "@lucide/vue";
+import { Search, Sun, Moon, Minus, Square, X, X as ClearIcon, Settings, RefreshCw, Info, Mic, MicOff, DownloadCloud, Sparkles } from "@lucide/vue";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
 import { useSettingsStore } from "../stores/settings";
@@ -30,6 +30,10 @@ function onWindowClick(e: MouseEvent) {
 
 onMounted(() => {
   window.addEventListener("click", onWindowClick);
+  // Silent check for update 3 seconds after boot
+  setTimeout(() => {
+    void checkUpdate(false);
+  }, 3000);
 });
 
 onBeforeUnmount(() => {
@@ -47,16 +51,105 @@ function openAbout() {
   emit("navigate", "about");
 }
 
-async function checkUpdate() {
-  menuOpen.value = false;
-  toast.info("Checking for updates...", "Update");
-  await new Promise((resolve) => setTimeout(resolve, 800));
-  let ver = "0.1.0";
+// Updater state & dialog
+const updateAvailable = ref(false);
+const updateModalOpen = ref(false);
+const newVersion = ref("");
+const updateNotes = ref("");
+const isUpdating = ref(false);
+const updateProgress = ref(0);
+
+async function checkUpdate(manual = true) {
+  if (manual) {
+    menuOpen.value = false;
+    toast.info("Checking for updates...", "Update");
+  }
+
   try {
-    const v = await api.getAppVersion();
-    if (v) ver = v;
-  } catch { }
-  toast.success(`You are running the latest version of Slide Up (v${ver}).`, "Up to date");
+    // 1. Try official Tauri updater plugin if loaded
+    const updaterMod = await import("@tauri-apps/plugin-updater").catch(() => null);
+    if (updaterMod?.check) {
+      const update = await updaterMod.check();
+      if (update?.available) {
+        updateAvailable.value = true;
+        newVersion.value = update.version;
+        updateNotes.value = update.body || "A new performance and feature update is ready for Slide Up Desktop.";
+        updateModalOpen.value = true;
+        return;
+      }
+    }
+
+    // 2. Fallback check: check GitHub Releases API
+    const res = await fetch("https://api.github.com/repos/bhsorg/slide-up/releases/latest", {
+      headers: { Accept: "application/vnd.github.v3+json" }
+    }).catch(() => null);
+
+    if (res && res.ok) {
+      const data = await res.json();
+      const latestTag = (data.tag_name || "").replace(/^v/, "");
+      const currentVer = await api.getAppVersion().catch(() => "0.1.0");
+
+      if (latestTag && latestTag !== currentVer && latestTag > currentVer) {
+        updateAvailable.value = true;
+        newVersion.value = latestTag;
+        updateNotes.value = data.body || "New release available on GitHub.";
+        if (manual) {
+          updateModalOpen.value = true;
+        }
+        return;
+      }
+    }
+
+    if (manual) {
+      const ver = await api.getAppVersion().catch(() => "0.1.0");
+      toast.success(`You are running the latest version of Slide Up (v${ver}).`, "Up to date");
+    }
+  } catch (err) {
+    if (manual) {
+      toast.error("Could not reach update server. Check your internet connection.", "Update");
+    }
+  }
+}
+
+async function startInstallUpdate() {
+  isUpdating.value = true;
+  toast.info("Downloading update in background...", "Update");
+
+  try {
+    const updaterMod = await import("@tauri-apps/plugin-updater").catch(() => null);
+    if (updaterMod?.check) {
+      const update = await updaterMod.check();
+      if (update?.available) {
+        let downloaded = 0;
+        let contentLength = 0;
+        await update.downloadAndInstall((event) => {
+          if (event.event === "Started") {
+            contentLength = event.data.contentLength || 0;
+          } else if (event.event === "Progress") {
+            downloaded += event.data.chunkLength;
+            if (contentLength > 0) {
+              updateProgress.value = Math.min(100, Math.round((downloaded / contentLength) * 100));
+            }
+          } else if (event.event === "Finished") {
+            updateProgress.value = 100;
+          }
+        });
+        toast.success("Update downloaded! Restarting to apply...", "Updated");
+        const { relaunch } = await import("@tauri-apps/plugin-process");
+        await relaunch();
+        return;
+      }
+    }
+
+    // Fallback: open GitHub release page if direct plugin binary install not configured
+    await api.openExternal("https://github.com/bhsorg/slide-up/releases/latest");
+    updateModalOpen.value = false;
+  } catch (err) {
+    toast.error(String(err), "Update installation failed");
+    await api.openExternal("https://github.com/bhsorg/slide-up/releases/latest");
+  } finally {
+    isUpdating.value = false;
+  }
 }
 
 // Voice / Microphone search using Web Speech Recognition API
@@ -210,19 +303,25 @@ placeholder="Search media, artists, albums, or lyrics..."
       <div ref="menuRef" class="relative">
         <button
           type="button"
-          class="flex h-7.5 w-7.5 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-ink cursor-pointer"
+          class="relative flex h-7.5 w-7.5 items-center justify-center rounded-md text-muted transition-colors hover:bg-hover hover:text-ink cursor-pointer"
           :class="{ 'bg-hover text-ink': menuOpen }"
           title="Settings & More"
           @click.stop="menuOpen = !menuOpen"
         >
           <Settings :size="15" />
+          <!-- Update available notification badge -->
+          <span
+            v-if="updateAvailable"
+            class="absolute top-1 right-1 h-2 w-2 rounded-full bg-emerald-400 ring-2 ring-secondary animate-pulse"
+            title="Update available"
+          />
         </button>
 
         <!-- Dropdown Menu -->
         <Transition name="fade-scale">
           <div
             v-if="menuOpen"
-            class="absolute right-0 top-full mt-1.5 w-44 z-50 rounded-xl border border-line-strong bg-elevated/95 p-1.5 shadow-xl backdrop-blur-md"
+            class="absolute right-0 top-full mt-1.5 w-48 z-50 rounded-xl border border-line-strong bg-elevated/95 p-1.5 shadow-xl backdrop-blur-md"
             @click.stop
           >
             <button
@@ -236,11 +335,16 @@ placeholder="Search media, artists, albums, or lyrics..."
 
             <button
               type="button"
-              class="topbar-menu-item"
-              @click="checkUpdate"
+              class="topbar-menu-item relative flex items-center justify-between"
+              @click="checkUpdate(true)"
             >
-              <RefreshCw :size="14" class="text-blue-400" />
-              <span>Check Update</span>
+              <div class="flex items-center gap-2">
+                <RefreshCw :size="14" class="text-blue-400" :class="{ 'animate-spin': isUpdating }" />
+                <span>Check Update</span>
+              </div>
+              <span v-if="updateAvailable" class="rounded bg-emerald-500/20 px-1 py-0.2 text-[9px] font-bold text-emerald-400">
+                NEW
+              </span>
             </button>
 
             <div class="my-1 h-px bg-line" />
@@ -285,6 +389,90 @@ placeholder="Search media, artists, albums, or lyrics..."
       </div>
     </div>
   </header>
+
+  <!-- Modern In-App Update Modal Dialog -->
+  <Teleport to="body">
+    <Transition name="fade-scale">
+      <div
+        v-if="updateModalOpen"
+        class="fixed inset-0 z-[99999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        @click.self="!isUpdating ? (updateModalOpen = false) : null"
+      >
+        <div class="relative w-full max-w-md rounded-2xl border border-line-strong bg-elevated p-6 shadow-2xl space-y-4">
+          <!-- Modal Header -->
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex items-center gap-3">
+              <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-purple/20 text-purple-400">
+                <Sparkles :size="22" />
+              </div>
+              <div>
+                <h3 class="text-base font-bold text-ink">Update Available!</h3>
+                <p class="text-xs text-muted">A new version of Slide Up is ready</p>
+              </div>
+            </div>
+            <button
+              v-if="!isUpdating"
+              type="button"
+              class="rounded-lg p-1 text-faint hover:bg-hover hover:text-ink transition-colors"
+              title="Close"
+              @click="updateModalOpen = false"
+            >
+              <ClearIcon :size="16" />
+            </button>
+          </div>
+
+          <!-- Version info pill -->
+          <div class="flex items-center justify-between rounded-xl border border-line bg-panel p-3">
+            <span class="text-xs text-muted">Target Release:</span>
+            <span class="rounded-md bg-emerald-500/20 px-2 py-0.5 text-xs font-bold text-emerald-400">
+              v{{ newVersion }}
+            </span>
+          </div>
+
+          <!-- Release Notes -->
+          <div class="rounded-xl border border-line/60 bg-base/50 p-3 max-h-36 overflow-y-auto custom-scrollbar">
+            <p class="text-[11px] font-semibold text-faint uppercase mb-1">Release Highlights</p>
+            <p class="text-xs text-ink/90 whitespace-pre-wrap leading-relaxed">{{ updateNotes }}</p>
+          </div>
+
+          <!-- Progress Bar if updating -->
+          <div v-if="isUpdating" class="space-y-1.5 pt-1">
+            <div class="flex justify-between text-[11px] text-muted">
+              <span>Downloading update…</span>
+              <span>{{ updateProgress }}%</span>
+            </div>
+            <div class="h-2 w-full overflow-hidden rounded-full bg-panel">
+              <div
+                class="h-full bg-linear-to-r from-purple to-blue transition-all duration-200"
+                :style="{ width: `${updateProgress}%` }"
+              />
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="flex items-center justify-end gap-2.5 pt-2">
+            <button
+              v-if="!isUpdating"
+              type="button"
+              class="px-4 py-2 rounded-xl border border-line text-xs font-medium text-muted hover:bg-hover hover:text-ink transition-colors"
+              @click="updateModalOpen = false"
+            >
+              Later
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple text-xs font-semibold text-white shadow-lg shadow-purple/30 hover:bg-purple-600 transition-colors cursor-pointer disabled:opacity-60"
+              :disabled="isUpdating"
+              @click="startInstallUpdate"
+            >
+              <DownloadCloud :size="15" :class="{ 'animate-bounce': !isUpdating, 'animate-pulse': isUpdating }" />
+              <span>{{ isUpdating ? 'Installing…' : 'Update & Restart' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <style scoped>
