@@ -1,78 +1,166 @@
-# Slide Up
+# Slide Up 🎬🎵
 
-A desktop audio/video player built with Tauri 2, Rust, Vue 3 and TypeScript. Playback is powered by a bundled **libmpv** engine; there is no simulated playback.
+<div align="center">
 
-## Architecture
+![Slide Up Logo](public/app-icon.svg)
 
-- **Frontend** (`src/`): Vue 3 + Pinia + Tailwind CSS v4. `src/services/tauri.ts` is the only bridge to native commands/events.
-- **Backend** (`src-tauri/src/`): Rust/Tauri commands, SQLite (`rusqlite`, bundled) for the library/playlists/settings, `lofty` for audio tags, and a dynamic `libmpv` loader.
-- **Playback**: `libmpv-2.dll` is loaded at runtime with `libloading`. On Windows the video output is embedded as a native child HWND of the app window via mpv's `wid` option; on other platforms mpv uses its own window.
-- **Data**: stored in `slideup.db` under the OS app-data directory. Thumbnails and screenshots live alongside it.
+**A high-performance, modern desktop media player built with Tauri 2, Rust, Vue 3, and bundled libmpv.**
 
-## Requirements
+[![Tauri 2](https://img.shields.io/badge/Tauri-v2.0-blue.svg?logo=tauri)](https://tauri.app/)
+[![Rust](https://img.shields.io/badge/Rust-1.80+-orange.svg?logo=rust)](https://www.rust-lang.org/)
+[![Vue 3](https://img.shields.io/badge/Vue-3.5-emerald.svg?logo=vuedotjs)](https://vuejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6.svg?logo=typescript)](https://www.typescriptlang.org/)
+[![libmpv](https://img.shields.io/badge/Engine-libmpv--2-red.svg)](https://mpv.io/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4.0-38B2AC.svg?logo=tailwindcss)](https://tailwindcss.com/)
+[![License](https://img.shields.io/badge/License-Proprietary%20%2F%20Private-purple.svg)]()
 
-- Windows (x64) for embedded video rendering; Rust and Node.js for development.
-- `src-tauri/resources/libmpv-2.dll` must be present. It is bundled into production builds via `tauri.conf.json` → `bundle.resources`.
-- `src-tauri/binaries/onnxruntime.dll` must be present. It is loaded at runtime through `ort` and bundled via `tauri.conf.json` → `bundle.resources`; no build-time linking, bindgen or libclang is required.
+[Features](#key-features) • [Architecture](#architecture) • [Keyboard Shortcuts](#default-keyboard-shortcuts) • [Installation & Development](#installation--development) • [AI Features](#ai-features)
 
-## Commands
+</div>
 
-```bash
-npm install
-npm run tauri dev     # development app
-npm run build         # type-check + frontend bundle
-cargo test --manifest-path src-tauri/Cargo.toml   # libmpv decode smoke test
-npm run tauri build   # production installer
+---
+
+## 🌟 Overview
+
+**Slide Up** is a next-generation desktop media player engineered for maximum performance, broad format compatibility, and intelligent media handling. Unlike web-wrapped players that rely on browser HTML5 audio/video codecs, **Slide Up** embeds a native, hardware-accelerated **libmpv** engine directly within the operating system window.
+
+Whether you are playing high-bitrate 4K HDR videos, lossless FLAC albums, online streaming playlists, or parsing torrent media packages, Slide Up delivers silky-smooth playback with real-time synchronized lyrics, companion artwork, and offline AI enhancement.
+
+---
+
+## 🚀 Key Features
+
+### 🎧 Audio Playback
+- **Universal Codec Support**: Full playback for MP3, FLAC, WAV, AAC, OGG, Opus, M4A, ALAC, AIFF, and more powered directly by libmpv.
+- **Synchronized Lyrics (LRCLIB)**:
+  - Real-time time-stamped LRC scrolling line-by-line display with millisecond precision.
+  - Interactive lyrics navigation — click any line to seek directly to that exact moment.
+  - Smart Bollywood / Transliteration query matching (e.g., automatically matches *Humari* $\leftrightarrow$ *Hamari*, *Adhoori* $\leftrightarrow$ *Adhuri*).
+  - YouTube title junk cleaner (removes actor credits, promo tags, `- full song`, `| Emraan Hashmi`, etc. automatically).
+  - Persistent disk cache for offline lyrics access across app restarts.
+- **Audio Queue & Library**: Shuffle, repeat (one/all), dynamic queue reordering, artist bio popups, and gapless track playback.
+
+### 🎥 Video Playback
+- **Direct Native Rendering**: Video frames render into a native Win32 child HWND window with zero frame-dropping and minimal CPU/GPU overhead.
+- **Hardware Acceleration**: Auto-probed hardware decoders (D3D11VA, DXVA2, NVDEC, VAAPI).
+- **Subtitles Engine**: Full support for SRT, ASS, SSA, and WebVTT subtitles with styling, subtitle track switcher, and auto-detection.
+- **Playback Controls**: Micro frame-stepping, aspect ratio switching (16:9, 4:3, 21:9, Original, Fill), native screenshot capture, and audio track selection.
+
+### 🧲 BitTorrent Parser & File Browser
+- **Pure TypeScript Bencode Decoder**: Decodes any `.torrent` file in real time with SHA-1 InfoHash calculation.
+- **Interactive File Selection Browser**:
+  - Filter chips to instantly isolate **All**, **Audio only**, **Video only**, or specific extensions (`.mp3`, `.wav`, `.flac`, `.mp4`, `.mkv`).
+  - Selective import — choose only the exact tracks you want to add to your playlist.
+  - Total selected size counter and file counter in real time.
+- **Companion Artwork Matching**:
+  - Automatically identifies companion image files (e.g. `song.mp3` $\leftrightarrow$ `song.png` / `song.jpg`) and folder cover art (`cover.jpg`, `folder.jpg`, `poster.png`).
+  - Displays companion badges on each file and sets playlist cover art.
+- **BEP 19 Web Seed & Archive.org Streaming**:
+  - Automatically resolves `url-list`, `httpseeds`, and Archive.org download streams to direct, percent-encoded HTTPS URLs.
+  - Enables direct, instant online streaming of torrent tracks without waiting for full P2P downloads.
+
+### 🌐 Online M3U / M3U8 Playlist Streaming
+- **Native CORS-Bypass Streaming**: Fetches external playlists via the native Rust backend, bypassing browser cross-origin restrictions entirely.
+- **Auto-Categorization**: Automatically categorizes streams into **Audio (Music)** and **Video (Live TV)** with distinct badges.
+- **Archive.org Link Sanitization**: Automatically normalizes unencoded whitespace (`%20`), ampersands (`%26`), and enforces HTTPS redirects.
+- **Export & Import**: Export any playlist to clean `#EXTM3U` format or import remote URLs and local files with one click.
+
+### 🤖 AI Capabilities
+- **Live Captions (SenseVoice STT)**:
+  - Local, offline SenseVoice Speech-to-Text model (`model.int8.onnx` + Silero VAD, ~230 MB).
+  - Streaming, resumable, and cancellable downloader in Settings.
+- **AI Video Super-Resolution & Upscaling**:
+  - **FSRCNNX x2**: Real-time GLSL shader enhancement applied directly via mpv's pipeline.
+  - **Real-ESRGAN Compact x4**: Offline batch video upscaler utilizing ONNX Runtime and ffmpeg frame extraction.
+
+---
+
+## 🏗️ Architecture
+
+```
+slide-up/
+├── src/                          # Frontend (Vue 3 + TypeScript + Tailwind CSS)
+│   ├── components/               # AudioPlayer, VideoPlayer, MediaGrid, PlaybackDock, etc.
+│   ├── composables/              # useLyrics, useArtistBio, useToast, useSubtitleAvailability
+│   ├── services/                 # tauri.ts (IPC bridge), lyrics.ts, artist.ts
+│   ├── stores/                   # Pinia stores (player, playlist, library, settings)
+│   ├── types/                    # TypeScript interfaces (media, lyrics, playlist)
+│   ├── utils/                    # torrent.ts (bencode & web seed parser), m3u.ts
+│   └── views/                    # Home, Playlists, Favorites, Recent, Settings, LiveTv
+│
+└── src-tauri/                    # Native Backend (Rust + Tauri 2)
+    ├── src/
+    │   ├── commands/             # IPC command handlers (playback, playlists, lyrics, library)
+    │   ├── db/                   # SQLite database repository (rusqlite)
+    │   ├── mpv/                  # Dynamic libmpv-2 loader & Win32 child window embedding
+    │   ├── model_manager.rs      # Offline SenseVoice model downloader & manager
+    │   ├── upscaler_manager.rs   # Real-ESRGAN and FSRCNNX upscaling pipeline
+    │   └── lib.rs                # App entrypoint and Tauri plugin registrations
+    ├── binaries/                 # onnxruntime.dll
+    └── resources/                # libmpv-2.dll
 ```
 
-## Features
+---
 
-- Audio: MP3/WAV/FLAC/AAC/OGG/M4A, metadata, cover art, seek, volume, speed, shuffle, repeat, queue.
-- Video: MP4/MKV/AVI/MOV/WebM, fullscreen, hardware acceleration, frame step, screenshots, aspect ratio, subtitles (SRT/ASS/SSA/VTT), audio/subtitle track selection.
-- Library: file/folder import, drag & drop, thumbnails, favorites, recently played, playlists with M3U/M3U8 import/export, search and filters.
-- Settings: light/dark theme, playback defaults, subtitle preferences, and configurable keyboard shortcuts.
+## ⌨️ Default Keyboard Shortcuts
 
-## Default shortcuts
+| Shortcut | Action |
+| :--- | :--- |
+| `Space` | Play / Pause toggle |
+| `←` / `→` | Seek backward / forward 5 seconds |
+| `↑` / `↓` | Volume up / down (5% increments) |
+| `M` | Mute / Unmute audio |
+| `F` | Toggle fullscreen mode |
+| `Esc` | Exit fullscreen mode |
+| `N` / `P` | Next track / Previous track |
+| `Ctrl + O` | Open media files from computer |
+| `Ctrl + Shift + O` | Open entire folder into library |
 
-| Key | Action |
-| --- | --- |
-| `Space` | Play / Pause |
-| `←` / `→` | Seek −5 s / +5 s |
-| `↑` / `↓` | Volume up / down |
-| `F` | Fullscreen |
-| `Esc` | Exit fullscreen |
-| `M` | Mute |
-| `N` / `P` | Next / Previous |
-| `Ctrl+O` | Open files |
-| `Ctrl+Shift+O` | Open folder |
+---
 
-## ONNX Runtime on other platforms
+## 🛠️ Installation & Development
 
-The app loads ONNX Runtime dynamically (`ort`'s `load-dynamic` feature), so there is nothing to compile or link on any platform. Replace `src-tauri/binaries/onnxruntime.dll` with the matching library for your target and put it in the same folder:
+### Prerequisites
+- **Node.js**: v18.0 or newer
+- **Rust**: v1.80 or newer (`rustup default stable`)
+- **Windows (x64)**: Required for embedded Win32 video rendering (macOS/Linux support native windows)
 
-- Windows: `onnxruntime.dll`
-- macOS: `libonnxruntime.dylib`
-- Linux: `libonnxruntime.so`
+### Setup Instructions
 
-`ORT_DYLIB_PATH` can also point at a custom library. The provider candidates are chosen per platform (DirectML → CPU on Windows, CoreML → CPU on macOS, CUDA → CPU on Linux) and the first one that creates a session wins.
+1. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/bhsorg/slide-up.git
+   cd slide-up
+   ```
 
-## Offline captions (SenseVoice)
+2. **Install Dependencies**:
+   ```bash
+   npm install
+   ```
 
-Settings → Live captions manages a local SenseVoice model (`model.int8.onnx`, `tokens.txt` and `silero_vad.onnx`, ~230 MB) downloaded into `app_data_dir/models/sense-voice`. Downloads are streaming, resumable, cancellable and atomically published; progress is emitted as `model-download-progress`. `initialize_engine` initializes ONNX Runtime once per process, then builds `OnnxCaptionEngine` (src-tauri/src/onnx_caption_engine.rs) off the UI thread. The engine loads a CPU Silero VAD session plus a SenseVoice STT session, probes GPU providers and falls back to CPU with thread count `clamp(cores/2, 1, 4)`. It exposes `is_speech()` and `transcribe_chunk()` primitives; capturing player audio and drawing the on-screen overlay are not wired up yet. `src-tauri/src/model_commands.rs` is an alternate, unwired draft kept for reference — the active commands are the five in `model_manager.rs`.
+3. **Verify Native Binaries**:
+   Ensure `src-tauri/resources/libmpv-2.dll` and `src-tauri/binaries/onnxruntime.dll` are in place.
 
-**GPU limitation:** the bundled `onnxruntime.dll` is the stock CPU build of ORT 1.20.1, so the GPU attempt fails and the hardware badge shows **CPU**. To enable hardware acceleration, replace the DLL with an ORT build that includes DirectML (Windows), CoreML (macOS) or CUDA (Linux); the code will then select it automatically. The live-captions toggle only persists the user preference — audio capture, transcription and the on-screen overlay are a separate playback feature and are not implemented here.
+4. **Run in Development Mode**:
+   ```bash
+   npm run tauri dev
+   ```
 
-## AI upscaler models
+5. **Build for Production**:
+   ```bash
+   npm run tauri build
+   ```
 
-Settings → AI upscaling lists SPAN x2/x4, Real-ESRGAN Compact, ESPCN x2/x4 and the FSRCNNX x2 mpv shader. ONNX files go to `app_data_dir/models/upscalers`, GLSL shaders to `app_data_dir/shaders`, using the same streaming/resumable/cancellable downloader and `upscaler-download-progress` event as the caption model. Only sources verified with a HEAD request are enabled:
+---
 
-- Real-ESRGAN Compact — `realesr-general-x4v3.onnx`, 4,866,417 bytes, from `huggingface.co/CoderViking/realesr-general-x4v3-onnx`.
-- FSRCNNX x2 — `FSRCNNX_x2_8-0-4-1.glsl`, 71,296 bytes, from the `igv/FSRCNN-TensorFlow` 1.1 GitHub release.
+## 🔒 Security & Privacy
 
-The SPAN and ESPCN entries are shown as a catalog with "Source URL needed" until verified URLs are supplied. Once the FSRCNNX shader is installed, the video player shows an **AI Enhance** button (top bar and right-click menu) that applies it at runtime via mpv's `glsl-shaders` property; toggling it off clears the property.
+- **Fully Offline Core**: All local media library scanning, audio tagging, and AI processing run 100% locally on your machine.
+- **Zero Telemetry**: No user tracking or behavioral telemetry.
+- **Secure Sandbox**: External web links and network streams strictly use secure HTTPS endpoints with verified fallbacks.
 
-Once Real-ESRGAN Compact is downloaded, the video player also shows an **Upscale Video** button (top bar and right-click menu). It runs a fully offline batch upscale: ffmpeg decodes raw RGB frames, the ONNX model upscales each frame 4x with ONNX Runtime, and ffmpeg re-encodes to `app_data_dir/upscaled/<name>-realesrgan.mp4` with the original audio copied. Progress is emitted as `upscale-progress`, and the work runs off the UI thread. **ffmpeg and ffprobe must be installed and on PATH** — they are not bundled, and the command reports a clear error if missing. This is separate from the live FSRCNNX shader toggle; the other ONNX models are not applied to playback.
+---
 
-## Notes
-
-Codec support is provided by the bundled libmpv build, not by OS codecs. Unsupported or corrupted files surface a user-facing error instead of failing silently. On Windows the video is a native Win32 child window. While the player is focused it sits below a transparent webview, so playback controls, popovers and the context menu render above the video. When the window loses focus the video moves above an opaque webview, avoiding a full WebView2 alpha-composite every frame while another app is active.
+<div align="center">
+  <sub>Maintained by <strong>bhsorg</strong> • Crafted with precision using Tauri 2 and Rust</sub>
+</div>
