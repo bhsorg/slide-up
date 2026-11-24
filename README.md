@@ -25,7 +25,7 @@
 
 | Platform | Download | Notes |
 | :--- | :--- | :--- |
-| Windows 10 / 11 (64-bit) | [Latest installer](https://github.com/bhsorg/slide-up/releases/latest) | NSIS and MSI installers, automatic in-app updates, bundled libmpv |
+| Windows 10 / 11 (64-bit) | [Latest installer (EXE)](https://github.com/bhsorg/slide-up/releases/latest/download/Slide.Up_0.1.3_x64-setup.exe) · [MSI](https://github.com/bhsorg/slide-up/releases/latest/download/Slide.Up_0.1.3_x64_en-US.msi) | Direct download, automatic in-app updates, bundled libmpv |
 | Android | [Android edition](https://hinditutorpoint.github.io/slideup/) | Separate mobile edition for phones and tablets |
 
 All releases, installer assets, and changelogs are published on the [GitHub Releases page](https://github.com/bhsorg/slide-up/releases).
