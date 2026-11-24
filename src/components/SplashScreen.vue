@@ -12,14 +12,14 @@ defineProps<{ visible: boolean }>();
         class="fixed inset-0 z-[10000] flex flex-col items-center justify-center overflow-hidden bg-base text-ink"
         style="background-image: radial-gradient(circle at 50% 42%, rgba(135, 63, 255, 0.18), transparent 58%)"
       >
-        <div class="splash-logo h-24 w-24 drop-shadow-[0_0_30px_rgba(135,63,255,0.45)]">
+        <div class="splash-logo h-16 w-16 drop-shadow-[0_0_30px_rgba(135,63,255,0.45)]">
           <AppLogo />
         </div>
 
-        <h1 class="mt-6 text-3xl font-semibold tracking-tight">Slide Up</h1>
-        <p class="mt-1 text-xs tracking-[0.2em] text-muted uppercase">Play · Enjoy · Repeat</p>
+        <h1 class="mt-4 text-2xl font-semibold tracking-tight">Slide Up</h1>
+        <p class="mt-1 text-[11px] tracking-[0.2em] text-muted uppercase">Play · Enjoy · Repeat</p>
 
-        <div class="mt-10 flex items-center gap-1.5" aria-label="Loading">
+        <div class="mt-6 flex items-center gap-1.5" aria-label="Loading">
           <span class="splash-dot" />
           <span class="splash-dot splash-dot-delay-1" />
           <span class="splash-dot splash-dot-delay-2" />

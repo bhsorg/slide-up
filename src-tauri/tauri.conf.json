@@ -28,7 +28,7 @@
       },
       {
         "label": "player-widget",
-        "url": "index.html",
+        "url": "index.html?widget=1",
         "title": "Slide Up Player",
         "width": 320,
         "height": 100,
@@ -46,7 +46,7 @@
       },
       {
         "label": "video-widget",
-        "url": "index.html",
+        "url": "index.html?widget=1",
         "title": "Slide Up Video",
         "width": 320,
         "height": 240,
@@ -64,7 +64,7 @@
       },
       {
         "label": "playlist-widget",
-        "url": "index.html",
+        "url": "index.html?widget=1",
         "title": "Slide Up Playlist",
         "width": 320,
         "height": 480,

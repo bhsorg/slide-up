@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CheckCircle2, CircleAlert, Info, TriangleAlert, X } from "@lucide/vue";
@@ -11,7 +12,6 @@ import PlaylistPanel from "./components/PlaylistPanel.vue";
 import PlaylistPicker from "./components/PlaylistPicker.vue";
 import MediaProperties from "./components/MediaProperties.vue";
 import ArtistBioModal from "./components/ArtistBioModal.vue";
-import SplashScreen from "./components/SplashScreen.vue";
 import PlaybackDock from "./components/PlaybackDock.vue";
 import Home from "./views/Home.vue";
 import MusicLibrary from "./views/MusicLibrary.vue";
@@ -31,6 +31,11 @@ import { useShortcuts } from "./composables/useShortcuts";
 import { api, onEvent } from "./services/tauri";
 import type { ViewId } from "./types/settings";
 
+// Mirrored by the compact startup size in index.html.
+const SPLASH_MS = 650;
+const MAIN_WIDTH = 1200;
+const MAIN_HEIGHT = 720;
+
 const library = useLibraryStore();
 const player = usePlayerStore();
 const playlists = usePlaylistStore();
@@ -43,7 +48,6 @@ const view = ref<Screen>("home");
 const queueOpen = ref(true);
 const dragging = ref(false);
 const windowFocused = ref(true);
-const splashVisible = ref(true);
 let unlistenDragDrop: (() => void) | null = null;
 let unlistenFocus: (() => void) | null = null;
 let unlistenTaskbar: (() => void) | null = null;
@@ -199,9 +203,7 @@ async function initializeDragDrop() {
 
 onMounted(async () => {
   const splashStartedAt = performance.now();
-  // The inline HTML splash covered startup before Vue existed; the animated
-  // SplashScreen component is now mounted, so hand over to it seamlessly.
-  document.getElementById("boot-splash")?.remove();
+  const bootSplash = document.getElementById("boot-splash");
   try {
     windowFocused.value = document.hasFocus();
     await applySurfaceMode();
@@ -231,11 +233,18 @@ onMounted(async () => {
     await initializeDragDrop();
   } finally {
     // Keep the splash up briefly so it does not flash on very fast starts.
-    const remaining = Math.max(0, 650 - (performance.now() - splashStartedAt));
+    const remaining = Math.max(0, SPLASH_MS - (performance.now() - splashStartedAt));
     if (remaining > 0) {
       await new Promise((resolve) => window.setTimeout(resolve, remaining));
     }
-    splashVisible.value = false;
+    // Fade the single inline splash out at compact size, then grow into the
+    // full player window. No second Vue splash is mounted on top of it.
+    bootSplash?.classList.add("is-leaving");
+    await new Promise((resolve) => window.setTimeout(resolve, 420));
+    bootSplash?.remove();
+    const win = getCurrentWindow();
+    await win.setSize(new LogicalSize(MAIN_WIDTH, MAIN_HEIGHT)).catch(() => undefined);
+    await win.center().catch(() => undefined);
   }
 });
 
@@ -300,7 +309,6 @@ onBeforeUnmount(() => {
     <PlaylistPicker />
     <MediaProperties />
     <ArtistBioModal />
-    <SplashScreen :visible="splashVisible" />
 
     <div class="pointer-events-none fixed right-5 top-20 z-[60] flex w-[340px] flex-col gap-2">
       <TransitionGroup name="toast">

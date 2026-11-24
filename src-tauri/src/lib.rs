@@ -386,7 +386,12 @@ pub fn run() {
                     let _ = window.hide();
                 }
             } else if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
+                // Prepare splash geometry but leave the window hidden. The
+                // inline HTML reveal shows it after its first paint; showing it
+                // here made the splash flash at the old position before the
+                // frontend centered it (a visible "two splashes" effect).
+                let _ = window.set_size(tauri::LogicalSize::new(560.0, 340.0));
+                let _ = window.center();
             }
 
             // Restore the optional desktop widget only after the main window

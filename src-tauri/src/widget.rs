@@ -52,8 +52,10 @@ pub fn show_if_enabled(app: &AppHandle) {
     if enabled {
         show(app);
         set_topmost(app, true);
+        set_main_topmost(app, main_window_visible(app));
     } else {
         hide(app);
+        set_main_topmost(app, false);
     }
 }
 
@@ -68,18 +70,35 @@ fn widget_enabled(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// Keep the widget above other apps, but never above the full player window.
+/// Keep the widget above other apps at all times. While the full player is
+/// visible, also raise it above the widget so only the player covers it.
 /// Tauri window commands must run on the main thread.
 fn apply_z_order(app: &AppHandle) {
-    let behind = main_window_visible(app);
+    let main_visible = main_window_visible(app);
     let thread_app = app.clone();
-    if let Err(error) = app.run_on_main_thread(move || set_topmost(&thread_app, !behind)) {
+    if let Err(error) = app.run_on_main_thread(move || {
+        set_topmost(&thread_app, true);
+        set_main_topmost(&thread_app, main_visible);
+    }) {
         tracing::warn!("Could not update widget z-order: {error}");
     }
 }
 
 fn set_topmost(app: &AppHandle, topmost: bool) {
     if let Some(window) = app.get_webview_window(LABEL) {
+        let _ = window.set_always_on_top(topmost);
+    }
+}
+
+/// Raising the main window after the widget keeps the player on top of its own
+/// widget while both are always-on-top against other applications.
+fn set_main_topmost(app: &AppHandle, topmost: bool) {
+    if let Some(window) = app.get_webview_window("main") {
+        if topmost {
+            // Tauri skips the Win32 call when the style is already set, so
+            // toggle it to guarantee the player is raised above a new widget.
+            let _ = window.set_always_on_top(false);
+        }
         let _ = window.set_always_on_top(topmost);
     }
 }
@@ -197,11 +216,10 @@ fn create(app: &AppHandle) -> tauri::Result<()> {
         .ok_or(tauri::Error::WindowNotFound)?;
 
     let window = WebviewWindowBuilder::from_config(app, config)?.build()?;
-    // The config declares the widget always-on-top. If the full window is
-    // already open, clear that before Vue reveals the webview so it never
-    // flashes over the player.
-    let behind_main = main_window_visible(app);
-    let _ = window.set_always_on_top(!behind_main);
+    // Keep the widget above other apps. The main window is raised afterwards
+    // so it still covers the widget while the full player is open.
+    let _ = window.set_always_on_top(true);
+    set_main_topmost(app, main_window_visible(app));
 
     #[cfg(windows)]
     {

@@ -6,6 +6,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
     <title>Slide Up</title>
+    <script>
+      // Widget windows load this same HTML; hide the splash before first paint
+      // so only the main window ever shows a splash.
+      if (new URLSearchParams(location.search).has("widget")) {
+        document.documentElement.classList.add("no-boot-splash");
+      }
+    </script>
     <style>
       /* Painted by the HTML parser before the JS bundle loads, so the window
          never shows an empty background during startup. */
@@ -17,16 +24,24 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 14px;
+        gap: 10px;
         background: radial-gradient(circle at 50% 42%, #211a4d 0%, #0e1430 45%, #080d1d 100%);
         color: #eef1ff;
         font-family: Inter, "Segoe UI", system-ui, sans-serif;
         user-select: none;
+        transition: opacity 420ms ease;
       }
-      #boot-splash img { width: 88px; height: 88px; object-fit: contain; }
-      #boot-splash h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: 0.01em; }
-      #boot-splash p { margin: 0; font-size: 12px; letter-spacing: 0.14em; color: #aab3d9; }
-      #boot-dots { display: flex; gap: 7px; margin-top: 10px; }
+      #boot-splash.is-leaving {
+        opacity: 0;
+        pointer-events: none;
+      }
+      html.no-boot-splash #boot-splash {
+        display: none;
+      }
+      #boot-splash img { width: 64px; height: 64px; object-fit: contain; }
+      #boot-splash h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: 0.01em; }
+      #boot-splash p { margin: 0; font-size: 11px; letter-spacing: 0.14em; color: #aab3d9; }
+      #boot-dots { display: flex; gap: 6px; margin-top: 6px; }
       #boot-dots span {
         width: 7px;
         height: 7px;
@@ -56,7 +71,13 @@
     <!-- The native window starts hidden (tauri.conf.json). Reveal it only after
          the inline splash above has had a frame to paint. -->
     <script type="module">
+      import { LogicalSize } from "@tauri-apps/api/dpi";
       import { getCurrentWindow } from "@tauri-apps/api/window";
+
+      // Keep the startup window compact while the splash is visible.
+      // Mirrored by the restore size in src/App.vue.
+      const SPLASH_WIDTH = 560;
+      const SPLASH_HEIGHT = 340;
 
       // The floating widget reveals itself once its Vue root mounts.
       // Centering it here would override its docked desktop position.
@@ -76,8 +97,9 @@
           requestAnimationFrame(() => {
             const win = getCurrentWindow();
             void (async () => {
-              // Config already centers at creation; re-center before revealing
-              // so the first visible frame is centered even after a show delay.
+              // Size the window before the first visible frame so the splash
+              // appears compact instead of filling the full player window.
+              await win.setSize(new LogicalSize(SPLASH_WIDTH, SPLASH_HEIGHT)).catch(() => undefined);
               await win.center().catch(() => undefined);
               await win.show().catch(() => undefined);
             })();
