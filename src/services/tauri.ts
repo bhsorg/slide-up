@@ -99,6 +99,9 @@ export const api = {
   screenshot: () => call<string>("screenshot"),
   syncVideoRect: (x: number, y: number, width: number, height: number) =>
     call<void>("sync_video_rect", { x, y, width, height }),
+  setWidgetVideo: (active: boolean) => call<void>("set_widget_video", { active }),
+  syncWidgetVideoRect: (x: number, y: number, width: number, height: number, radius: number) =>
+    call<void>("sync_widget_video_rect", { x, y, width, height, radius }),
   setSurfaceVisible: (visible: boolean) => call<void>("set_surface_visible", { visible }),
   setVideoLayer: (top: boolean) => call<void>("set_video_layer", { top }),
   setVideoFilter: (property: string, value: number) =>
@@ -200,6 +203,8 @@ export const events = {
   scanProgress: "library://scan-progress",
   storyboardProgress: "storyboard://progress",
   playlistsChanged: "playlists://changed",
+  videoWidgetVisibilityChanged: "widget://video-visibility",
+  playlistWidgetVisibilityChanged: "widget://playlist-visibility",
   settingsChanged: "settings://changed",
   toast: "app://toast",
   modelDownloadProgress: "model-download-progress",

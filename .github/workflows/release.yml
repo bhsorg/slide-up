@@ -71,6 +71,11 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'Slide Up v__VERSION__'
-          releaseBody: 'See full commit history and release notes.'
+          # Let GitHub build "What's Changed" from the merged commits/PRs so the
+          # in-app update modal has a real changelog to display.
+          generateReleaseNotes: true
           releaseDraft: false
           prerelease: false
+          # Publish latest.json + .sig assets so the updater endpoint works.
+          # NSIS is preferred for passive in-app updates on Windows.
+          updaterJsonPreferNsis: true

@@ -1,6 +1,6 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
-import App from "./App.vue";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -115,6 +115,29 @@ window.addEventListener("contextmenu", (e: MouseEvent) => {
 window.addEventListener("dragover", (e) => e.preventDefault(), false);
 window.addEventListener("drop", (e) => e.preventDefault(), false);
 
-const app = createApp(App);
-app.use(createPinia());
-app.mount("#app");
+/** Detachable widgets are extra webviews with their own compact roots. */
+function windowLabel(): string {
+  try {
+    return getCurrentWindow().label;
+  } catch {
+    return "main";
+  }
+}
+
+async function mount() {
+  // Only load the root component this window actually needs.
+  const label = windowLabel();
+  const { default: Root } =
+    label === "player-widget"
+      ? await import("./components/PlayerWidget.vue")
+      : label === "video-widget"
+        ? await import("./components/VideoWidget.vue")
+        : label === "playlist-widget"
+          ? await import("./components/PlaylistWidget.vue")
+          : await import("./App.vue");
+  const app = createApp(Root);
+  app.use(createPinia());
+  app.mount("#app");
+}
+
+void mount();

@@ -59,55 +59,132 @@ const updateNotes = ref("");
 const isUpdating = ref(false);
 const updateProgress = ref(0);
 
+/** Dotted semver comparison; string comparison breaks on 0.10.0 vs 0.9.0. */
+function isNewerVersion(candidate: string, current: string): boolean {
+  const parse = (value: string) =>
+    value
+      .replace(/^v/i, "")
+      .split(".")
+      .slice(0, 3)
+      .map((part) => Number.parseInt(part, 10) || 0);
+  const next = parse(candidate);
+  const running = parse(current);
+  for (let i = 0; i < 3; i += 1) {
+    if (next[i] !== running[i]) return next[i] > running[i];
+  }
+  return false;
+}
+
+const RELEASES_API = "https://api.github.com/repos/bhsorg/slide-up";
+// Older releases shipped this text as a placeholder instead of a changelog.
+const PLACEHOLDER_NOTES = "See full commit history and release notes.";
+
+function asReleaseTag(version: string): string {
+  return version.startsWith("v") ? version : `v${version}`;
+}
+
+/** Build a short change list from GitHub when a release has no useful body. */
+async function fetchCommitHighlights(tag: string): Promise<string> {
+  try {
+    const headers = { Accept: "application/vnd.github.v3+json" };
+    let commitsUrl = `${RELEASES_API}/commits?per_page=12`;
+
+    const releasesRes = await fetch(`${RELEASES_API}/releases?per_page=10`, { headers });
+    if (releasesRes.ok) {
+      const releases: Array<{ tag_name?: string }> = await releasesRes.json();
+      const previous = releases.find(
+        (release) => release.tag_name && release.tag_name !== tag,
+      )?.tag_name;
+      if (previous) {
+        commitsUrl = `${RELEASES_API}/compare/${encodeURIComponent(previous)}...${encodeURIComponent(tag)}`;
+      }
+    }
+
+    const res = await fetch(commitsUrl, { headers });
+    if (!res.ok) return "";
+    const data = await res.json();
+    const commits: Array<{ commit?: { message?: string } }> = Array.isArray(data?.commits)
+      ? data.commits
+      : Array.isArray(data)
+        ? data
+        : [];
+    const lines = commits
+      .slice(0, 12)
+      .map((item) => (item.commit?.message || "").split("\n")[0].trim())
+      .filter(Boolean)
+      .map((message) => `• ${message}`);
+    return lines.length ? `Recent changes:\n${lines.join("\n")}` : "";
+  } catch {
+    return "";
+  }
+}
+
+async function buildUpdateNotes(tag: string, body?: string | null): Promise<string> {
+  const text = (body || "").trim();
+  if (text && text !== PLACEHOLDER_NOTES) return text;
+  const commits = await fetchCommitHighlights(asReleaseTag(tag));
+  return commits || text || "A new performance and feature update is ready for Slide Up Desktop.";
+}
+
 async function checkUpdate(manual = true) {
   if (manual) {
     menuOpen.value = false;
     toast.info("Checking for updates...", "Update");
   }
 
+  // 1. Official Tauri updater. The endpoint 404s until a release publishes
+  //    latest.json, so keep this failure isolated and still try the fallback.
+  let updaterReachable = false;
   try {
-    // 1. Try official Tauri updater plugin if loaded
     const updaterMod = await import("@tauri-apps/plugin-updater").catch(() => null);
     if (updaterMod?.check) {
       const update = await updaterMod.check();
+      updaterReachable = true;
       if (update?.available) {
         updateAvailable.value = true;
         newVersion.value = update.version;
-        updateNotes.value = update.body || "A new performance and feature update is ready for Slide Up Desktop.";
+        updateNotes.value = await buildUpdateNotes(update.version, update.body);
         updateModalOpen.value = true;
         return;
       }
     }
+  } catch (err) {
+    console.warn("Tauri updater endpoint unavailable; trying GitHub releases.", err);
+  }
 
-    // 2. Fallback check: check GitHub Releases API
+  // 2. Fallback: GitHub Releases API, which does not need latest.json.
+  let releasesReachable = false;
+  try {
     const res = await fetch("https://api.github.com/repos/bhsorg/slide-up/releases/latest", {
       headers: { Accept: "application/vnd.github.v3+json" }
-    }).catch(() => null);
-
-    if (res && res.ok) {
+    });
+    if (res.ok) {
+      releasesReachable = true;
       const data = await res.json();
       const latestTag = (data.tag_name || "").replace(/^v/, "");
       const currentVer = await api.getAppVersion().catch(() => "0.1.0");
 
-      if (latestTag && latestTag !== currentVer && latestTag > currentVer) {
+      if (latestTag && isNewerVersion(latestTag, currentVer)) {
         updateAvailable.value = true;
         newVersion.value = latestTag;
-        updateNotes.value = data.body || "New release available on GitHub.";
+        updateNotes.value = await buildUpdateNotes(latestTag, data.body);
         if (manual) {
           updateModalOpen.value = true;
         }
         return;
       }
     }
-
-    if (manual) {
-      const ver = await api.getAppVersion().catch(() => "0.1.0");
-      toast.success(`You are running the latest version of Slide Up (v${ver}).`, "Up to date");
-    }
   } catch (err) {
-    if (manual) {
-      toast.error("Could not reach update server. Check your internet connection.", "Update");
-    }
+    console.warn("GitHub releases check failed.", err);
+  }
+
+  if (!manual) return;
+
+  if (updaterReachable || releasesReachable) {
+    const ver = await api.getAppVersion().catch(() => "0.1.0");
+    toast.success(`You are running the latest version of Slide Up (v${ver}).`, "Up to date");
+  } else {
+    toast.error("Could not reach update server. Check your internet connection.", "Update");
   }
 }
 

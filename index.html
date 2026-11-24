@@ -58,7 +58,20 @@
     <script type="module">
       import { getCurrentWindow } from "@tauri-apps/api/window";
 
+      // The floating widget reveals itself once its Vue root mounts.
+      // Centering it here would override its docked desktop position.
+      function isWidgetWindow() {
+        try {
+          return ["player-widget", "video-widget", "playlist-widget"].includes(
+            getCurrentWindow().label
+          );
+        } catch {
+          return false;
+        }
+      }
+
       function reveal() {
+        if (isWidgetWindow()) return;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const win = getCurrentWindow();

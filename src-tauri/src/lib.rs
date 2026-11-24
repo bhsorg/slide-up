@@ -13,6 +13,7 @@ mod models;
 mod mpv;
 mod state;
 mod upscaler_manager;
+mod widget;
 #[cfg(windows)]
 mod taskbar;
 
@@ -26,10 +27,67 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
+/// Media files passed to the process, ignoring the executable and flags.
+fn media_paths_from_args(args: impl IntoIterator<Item = String>) -> Vec<String> {
+    args.into_iter()
+        .skip(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .collect()
+}
+
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Import OS-provided files and play the first one, off the UI thread.
+fn play_launched_files(state: AppState, paths: Vec<String>) {
+    std::thread::spawn(move || {
+        let playback_path = paths.first().cloned();
+        if let Err(error) = commands::library::import_files_impl(&state, paths) {
+            tracing::warn!("Could not import the launched file: {error}");
+            return;
+        }
+        let Some(path) = playback_path else { return };
+        let media = {
+            let conn = state.db.lock().unwrap();
+            Repository::get_media_by_path(&conn, &path)
+        };
+        match media {
+            Ok(Some(item)) => {
+                if let Err(error) = state.play_media(&item) {
+                    tracing::warn!("Could not play the launched file: {error}");
+                }
+            }
+            Ok(None) => tracing::warn!("Launched file was not added to the library."),
+            Err(error) => tracing::warn!("Could not find the launched file: {error}"),
+        }
+    });
+}
+
 pub fn run() {
     tracing_subscriber::fmt().init();
 
     tauri::Builder::default()
+        // Must be the first plugin: a second launch forwards its argv here and
+        // exits, so "Open with" reuses the running window instead of opening a
+        // duplicate application.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let paths = media_paths_from_args(argv);
+            focus_main_window(app);
+            if paths.is_empty() {
+                return;
+            }
+            match app.try_state::<AppState>() {
+                Some(state) => play_launched_files(state.inner().clone(), paths),
+                None => {
+                    tracing::warn!("A file was opened before the application finished starting.");
+                }
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -83,8 +141,10 @@ pub fn run() {
 
             let startup = state.settings.lock().unwrap().clone();
 
-            // Tray icon with a context menu. The TrayIcon handle must stay
-            // alive for the icon to exist, so it is stored in app state.
+            // Tray icon with a context menu. Tauri's tray manager already keeps
+            // a reference alive; storing another clone in managed state would
+            // survive `cleanup_before_exit()` and leave a ghost icon in the
+            // Windows notification area when the process exits.
             let tray_handle = app.handle().clone();
             let toggle = MenuItem::with_id(&tray_handle, "tray_toggle", "Show / Hide", true, None::<&str>)?;
             let play_pause = MenuItem::with_id(&tray_handle, "tray_play_pause", "Play / Pause", true, None::<&str>)?;
@@ -101,7 +161,7 @@ pub fn run() {
             tray_menu.append(&separator)?;
             tray_menu.append(&quit)?;
 
-            let tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("application icon").clone())
                 .tooltip("Slide Up")
                 .menu(&tray_menu)
@@ -120,10 +180,18 @@ pub fn run() {
                 })
                 .on_menu_event(move |app, event| {
                     if event.id() == "tray_quit" {
+                        let state = app.state::<AppState>();
+                        let _ = state.mpv.stop();
+                        // Return the shared video HWND before the video widget
+                        // is torn down, for the same shutdown reason as above.
+                        widget::destroy(app);
                         for (_, window) in app.webview_windows() {
                             let _ = window.destroy();
                         }
-                        app.exit(0);
+                        // Let the event loop end after the last window is
+                        // destroyed. Calling exit() here uses
+                        // std::process::exit and skips Chromium's window
+                        // cleanup (Chrome_WidgetWin_0 / error 1412).
                         return;
                     }
                     if event.id() == "tray_toggle" {
@@ -152,7 +220,6 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-            app.manage(tray);
 
             // Window close handling and Windows taskbar buttons
             let close_handle = app.handle().clone();
@@ -176,6 +243,17 @@ pub fn run() {
                             if let Some(window) = close_handle.get_webview_window("main") {
                                 let _ = window.hide();
                             }
+                        } else {
+                            // This is a real quit. Stop playback and destroy the
+                            // hidden widget so no WebView2 window is left open.
+                            // Do not call exit(): it invokes std::process::exit
+                            // while Chromium still owns windows, which causes
+                            // "Failed to unregister class Chrome_WidgetWin_0.
+                            // Error = 1412". With the widget gone, closing the
+                            // main window leaves no windows and Tauri ends the
+                            // event loop cleanly.
+                            let _ = close_state.mpv.stop();
+                            widget::destroy(&close_handle);
                         }
                     }
                 });
@@ -191,6 +269,14 @@ pub fn run() {
                 }
             }
 
+            // Restore the optional desktop widget only after the main window
+            // has its final visibility. Creating its WebView2 window before
+            // that made it try to focus a window that was still hidden, which
+            // could stall startup and leave the UI controls unresponsive.
+            if startup.player_widget {
+                widget::show(app.handle());
+            }
+
             if startup.auto_scan_on_startup {
                 if let Some(folder) = startup.default_media_folder.clone() {
                     let scan_state = state.clone();
@@ -202,35 +288,9 @@ pub fn run() {
 
             // Files passed on the command line (file association / "Open with")
             // are imported and the first one starts playing.
-            let launch_paths: Vec<String> = std::env::args()
-                .skip(1)
-                .filter(|arg| !arg.starts_with('-'))
-                .collect();
+            let launch_paths = media_paths_from_args(std::env::args());
             if !launch_paths.is_empty() {
-                let launch_state = state.clone();
-                std::thread::spawn(move || {
-                    let playback_path = launch_paths.first().cloned();
-                    if let Err(error) =
-                        commands::library::import_files_impl(&launch_state, launch_paths)
-                    {
-                        tracing::warn!("Could not import the launched file: {error}");
-                        return;
-                    }
-                    let Some(path) = playback_path else { return };
-                    let media = {
-                        let conn = launch_state.db.lock().unwrap();
-                        Repository::get_media_by_path(&conn, &path)
-                    };
-                    match media {
-                        Ok(Some(item)) => {
-                            if let Err(error) = launch_state.play_media(&item) {
-                                tracing::warn!("Could not play the launched file: {error}");
-                            }
-                        }
-                        Ok(None) => tracing::warn!("Launched file was not added to the library."),
-                        Err(error) => tracing::warn!("Could not find the launched file: {error}"),
-                    }
-                });
+                play_launched_files((*state).clone(), launch_paths);
             }
 
             Ok(())
@@ -311,6 +371,8 @@ pub fn run() {
             commands::upscale::upscale_video_with_realesrgan,
             commands::playback::screenshot,
             commands::playback::sync_video_rect,
+            commands::playback::set_widget_video,
+            commands::playback::sync_widget_video_rect,
             commands::playback::set_surface_visible,
             commands::playback::set_video_layer,
             commands::playback::get_queue,

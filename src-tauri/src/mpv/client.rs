@@ -34,7 +34,10 @@ impl Surface {
     fn wid(&self) -> isize {
         0
     }
+    fn set_parent(&self, _parent: isize) {}
     fn set_position(&self, _x: i32, _y: i32, _w: i32, _h: i32) {}
+    fn set_corner_radius(&self, _w: i32, _h: i32, _radius: i32) {}
+    fn clear_corner_radius(&self) {}
     fn set_z_order(&self, _top: bool) {}
     fn show(&self) {}
     fn hide(&self) {}
@@ -48,12 +51,29 @@ pub enum EndReason {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoTarget {
+    Main,
+    VideoWidget,
+}
+
+type VideoRect = (i64, i64, i64, i64);
+type WidgetVideoRect = (i64, i64, i64, i64, i64);
+
 pub struct MpvClient {
     ffi: Arc<MpvFfi>,
     handle: *mut c_void,
     app: AppHandle,
     snapshot: RwLock<PlayerSnapshot>,
     surface: Mutex<Option<Surface>>,
+    /// Which window currently owns the native video child HWND. The video
+    /// widget borrows the same surface instead of starting a second mpv instance.
+    video_target: Mutex<VideoTarget>,
+    main_rect: Mutex<Option<VideoRect>>,
+    video_widget_rect: Mutex<Option<WidgetVideoRect>>,
+    /// Visibility requested by the main player view, so returning the surface
+    /// from the detached video window does not paint over a non-player screen.
+    main_surface_visible: Mutex<bool>,
     end_callback: Mutex<Option<Arc<dyn Fn(EndReason) + Send + Sync>>>,
     last_progress: Mutex<Instant>,
     progress_tick: AtomicU64,
@@ -102,6 +122,10 @@ impl MpvClient {
             app,
             snapshot: RwLock::new(snapshot),
             surface: Mutex::new(None),
+            video_target: Mutex::new(VideoTarget::Main),
+            main_rect: Mutex::new(None),
+            video_widget_rect: Mutex::new(None),
+            main_surface_visible: Mutex::new(false),
             end_callback: Mutex::new(None),
             last_progress: Mutex::new(Instant::now()),
             progress_tick: AtomicU64::new(0),
@@ -332,14 +356,36 @@ impl MpvClient {
         }
 
         if matches!(media.kind, crate::models::MediaKind::Video) {
-            let parent = parent_hwnd(&self.app)?;
-            let mut guard = self.surface.lock().unwrap();
-            if guard.is_none() {
-                *guard = Some(Surface::create(parent)?);
+            // If the detached video window is open, parent the single native
+            // surface there. Otherwise it stays on the main window.
+            let use_video_widget =
+                *self.video_target.lock().unwrap() == VideoTarget::VideoWidget
+                    && self
+                        .app
+                        .get_webview_window(crate::widget::VIDEO_LABEL)
+                        .is_some();
+            let parent = if use_video_widget {
+                window_hwnd(&self.app, crate::widget::VIDEO_LABEL)?
+            } else {
+                parent_hwnd(&self.app)?
+            };
+            {
+                let mut guard = self.surface.lock().unwrap();
+                if guard.is_none() {
+                    *guard = Some(Surface::create(parent)?);
+                }
+                let surface = guard.as_ref().unwrap();
+                if use_video_widget {
+                    surface.set_z_order(false);
+                    if let Some((x, y, w, h, radius)) = *self.video_widget_rect.lock().unwrap() {
+                        surface.set_position(x as i32, y as i32, w as i32, h as i32);
+                        surface.set_corner_radius(w as i32, h as i32, radius as i32);
+                    }
+                }
+                let wid = surface.wid() as i64;
+                self.set_i64("wid", wid)?;
+                surface.show();
             }
-            let wid = guard.as_ref().unwrap().wid() as i64;
-            self.set_i64("wid", wid)?;
-            guard.as_ref().unwrap().show();
             let _ = self.set_string("audio-display", "attachment");
             let _ = self.set_string("vid", "auto");
         } else {
@@ -549,15 +595,112 @@ impl MpvClient {
     }
 
     pub fn sync_video_rect(&self, x: i64, y: i64, width: i64, height: i64) -> Result<()> {
+        // Always remember the main view's geometry so the surface can be
+        // restored when the detached video window gives it back.
+        *self.main_rect.lock().unwrap() = Some((x, y, width, height));
+        if *self.video_target.lock().unwrap() == VideoTarget::VideoWidget {
+            return Ok(());
+        }
         if let Some(surface) = self.surface.lock().unwrap().as_ref() {
             surface.set_position(x as i32, y as i32, width as i32, height as i32);
+            surface.clear_corner_radius();
         }
         Ok(())
     }
 
-    /// Show or hide the native video HWND. Called when the video surface is
-    /// mounted/unmounted or the user navigates away from the player view.
+    /// Geometry of the detached video's transparent viewport, in physical pixels.
+    pub fn sync_widget_video_rect(
+        &self,
+        x: i64,
+        y: i64,
+        width: i64,
+        height: i64,
+        radius: i64,
+    ) -> Result<()> {
+        *self.video_widget_rect.lock().unwrap() = Some((x, y, width, height, radius));
+        if *self.video_target.lock().unwrap() != VideoTarget::VideoWidget {
+            return Ok(());
+        }
+        if let Some(surface) = self.surface.lock().unwrap().as_ref() {
+            surface.set_position(x as i32, y as i32, width as i32, height as i32);
+            surface.set_corner_radius(width as i32, height as i32, radius as i32);
+        }
+        Ok(())
+    }
+
+    /// Borrow the native video surface for the detached video window (`active`),
+    /// or return it to the main player view.
+    pub fn set_widget_video(&self, app: &AppHandle, active: bool) -> Result<()> {
+        let desired = if active {
+            VideoTarget::VideoWidget
+        } else {
+            VideoTarget::Main
+        };
+        let is_video = {
+            let snapshot = self.snapshot.read().unwrap();
+            matches!(
+                snapshot.current.as_ref().map(|item| &item.kind),
+                Some(crate::models::MediaKind::Video)
+            )
+        };
+
+        let mut target = self.video_target.lock().unwrap();
+        if *target == desired {
+            return Ok(());
+        }
+        // Never claim the surface before the video window actually exists;
+        // otherwise a later `play()` would create the surface in the
+        // wrong parent while this state still says Widget.
+        if active
+            && app
+                .get_webview_window(crate::widget::VIDEO_LABEL)
+                .is_none()
+        {
+            return Ok(());
+        }
+        // Keep the detached target while audio is playing so the next video
+        // continues in the video window.
+        if active && !is_video {
+            *target = desired;
+            return Ok(());
+        }
+
+        let surface_guard = self.surface.lock().unwrap();
+        if let Some(surface) = surface_guard.as_ref() {
+            if active {
+                surface.set_parent(window_hwnd(app, crate::widget::VIDEO_LABEL)?);
+                surface.set_z_order(false);
+                if let Some((x, y, w, h, radius)) = *self.video_widget_rect.lock().unwrap() {
+                    surface.set_position(x as i32, y as i32, w as i32, h as i32);
+                    surface.set_corner_radius(w as i32, h as i32, radius as i32);
+                }
+                surface.show();
+            } else {
+                surface.set_parent(parent_hwnd(app)?);
+                if let Some((x, y, w, h)) = *self.main_rect.lock().unwrap() {
+                    surface.set_position(x as i32, y as i32, w as i32, h as i32);
+                }
+                surface.clear_corner_radius();
+                surface.set_z_order(false);
+                if *self.main_surface_visible.lock().unwrap() {
+                    surface.show();
+                } else {
+                    surface.hide();
+                }
+            }
+        }
+        drop(surface_guard);
+        *target = desired;
+        Ok(())
+    }
+
+    /// Show or hide the native video HWND for the main player view.
     pub fn set_surface_visible(&self, visible: bool) -> Result<()> {
+        *self.main_surface_visible.lock().unwrap() = visible;
+        if *self.video_target.lock().unwrap() == VideoTarget::VideoWidget {
+            // The main view unmounting must not blank the detached video.
+            return Ok(());
+        }
         if let Some(surface) = self.surface.lock().unwrap().as_ref() {
             if visible {
                 surface.show();
@@ -572,6 +715,9 @@ impl MpvClient {
     /// calls this on window focus changes to trade DOM overlays for cheaper
     /// compositing while the player is in the background.
     pub fn set_video_layer(&self, top: bool) -> Result<()> {
+        if *self.video_target.lock().unwrap() == VideoTarget::VideoWidget {
+            return Ok(());
+        }
         if let Some(surface) = self.surface.lock().unwrap().as_ref() {
             surface.set_z_order(top);
         }
@@ -970,10 +1116,10 @@ impl Drop for MpvClient {
     }
 }
 
-fn parent_hwnd(app: &AppHandle) -> Result<isize> {
+fn window_hwnd(app: &AppHandle, label: &str) -> Result<isize> {
     let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| AppError::native("The main window is not available."))?;
+        .get_webview_window(label)
+        .ok_or_else(|| AppError::native(format!("The {label} window is not available.")))?;
     #[cfg(windows)]
     {
         let hwnd = window
@@ -988,6 +1134,10 @@ fn parent_hwnd(app: &AppHandle) -> Result<isize> {
         let _ = window;
         Ok(0)
     }
+}
+
+fn parent_hwnd(app: &AppHandle) -> Result<isize> {
+    window_hwnd(app, "main")
 }
 
 fn node_field<'a>(node: &'a MpvNode, key: &str) -> Option<&'a MpvNode> {

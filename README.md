@@ -1,234 +1,232 @@
-# Slide Up 🎬🎵
+# Slide Up
 
 <div align="center">
 
-<img src="public/slideup.png" width="96" height="96" alt="Slide Up Logo" />
+<img src="public/slideup.png" width="96" height="96" alt="Slide Up logo" />
 
-<br />
-
-**A high-performance, modern desktop media player built with Tauri 2, Rust, Vue 3, and bundled libmpv.**
+**A desktop media player built with Tauri 2, Rust, Vue 3, and a bundled libmpv engine.**
 
 [![Tauri 2](https://img.shields.io/badge/Tauri-v2.0-blue.svg?logo=tauri)](https://tauri.app/)
-[![Rust](https://img.shields.io/badge/Rust-1.80+-orange.svg?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-stable-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3.5-emerald.svg?logo=vuedotjs)](https://vuejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6.svg?logo=typescript)](https://www.typescriptlang.org/)
 [![libmpv](https://img.shields.io/badge/Engine-libmpv--2-red.svg)](https://mpv.io/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4.0-38B2AC.svg?logo=tailwindcss)](https://tailwindcss.com/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Donate](https://img.shields.io/badge/Donate-Buy%20Me%20A%20Coffee-yellow.svg?logo=buy-me-a-coffee)](https://buymeacoffee.com/hinditutorpoint)
 
-[Download](#-download) • [Features](#key-features) • [Architecture](#architecture) • [Keyboard Shortcuts](#default-keyboard-shortcuts) • [Installation](#installation--development) • [Contributing](#-contributing) • [Donate](#-support--donations)
+[Download](#download) | [Features](#key-features) | [Architecture](#architecture) | [Keyboard Shortcuts](#keyboard-shortcuts) | [Installation](#installation-and-development) | [Contributing](#contributing) | [Support](#support)
 
-<br /><br />
-
-![Slide Up Desktop](screenshots/slideup.png)
+![Slide Up desktop player](screenshots/slideup.png)
 
 </div>
 
 ---
 
-## 📥 Download
+## Download
 
-Get the latest stable release of **Slide Up** for your platform:
-
-| Platform | Download Link | Notes |
+| Platform | Download | Notes |
 | :--- | :--- | :--- |
-| **Windows 10 / 11 (64-bit)** | [![Download Windows](https://img.shields.io/badge/Download-Latest%20Installer%20(.exe%20%2F%20.msi)-blue?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/bhsorg/slide-up/releases/latest) | Automatic in-app updates, hardware acceleration & bundled libmpv |
-| **Android Edition** | [![Download Android](https://img.shields.io/badge/Android-GitHub%20Edition-green?style=for-the-badge&logo=android&logoColor=white)](https://hinditutorpoint.github.io/slideup/) | Dedicated mobile edition for phones and tablets |
+| Windows 10 / 11 (64-bit) | [Latest installer](https://github.com/bhsorg/slide-up/releases/latest) | NSIS and MSI installers, automatic in-app updates, bundled libmpv |
+| Android | [Android edition](https://hinditutorpoint.github.io/slideup/) | Separate mobile edition for phones and tablets |
 
-> 💡 **Tip**: All releases, changelogs, and installer assets are available on the [GitHub Releases Page](https://github.com/bhsorg/slide-up/releases).
-
----
-
-## 🌟 Overview
-
-**Slide Up** is a next-generation desktop media player engineered for maximum performance, broad format compatibility, and intelligent media handling. Unlike web-wrapped players that rely on browser HTML5 audio/video codecs, **Slide Up** embeds a native, hardware-accelerated **libmpv** engine directly within the operating system window.
-
-Whether you are playing high-bitrate 4K HDR videos, lossless FLAC albums, online streaming playlists, or parsing torrent media packages, Slide Up delivers silky-smooth playback with real-time synchronized lyrics, companion artwork, and offline AI enhancement.
+All releases, installer assets, and changelogs are published on the [GitHub Releases page](https://github.com/bhsorg/slide-up/releases).
 
 ---
 
-## 🚀 Key Features
+## Overview
 
-### 🎧 Audio Playback
-- **Universal Codec Support**: Full playback for MP3, FLAC, WAV, AAC, OGG, Opus, M4A, ALAC, AIFF, and more powered directly by libmpv.
-- **Synchronized Lyrics (LRCLIB)**:
-  - Real-time time-stamped LRC scrolling line-by-line display with millisecond precision.
-  - Interactive lyrics navigation — click any line to seek directly to that exact moment.
-  - Smart Bollywood / Transliteration query matching (e.g., automatically matches *Humari* $\leftrightarrow$ *Hamari*, *Adhoori* $\leftrightarrow$ *Adhuri*).
-  - YouTube title junk cleaner (removes actor credits, promo tags, `- full song`, `| Emraan Hashmi`, etc. automatically).
-  - Persistent disk cache for offline lyrics access across app restarts.
-- **Audio Queue & Library**: Shuffle, repeat (one/all), dynamic queue reordering, artist bio popups, and gapless track playback.
+Slide Up is a native desktop media player for audio and video. Instead of relying on browser HTML5 codecs, it embeds libmpv and renders video into a native Win32 child window. The Rust backend handles filesystem access, metadata extraction, library persistence, playlists, and media discovery, while Vue 3 renders the interface.
 
-### 🎥 Video Playback
-- **Direct Native Rendering**: Video frames render into a native Win32 child HWND window with zero frame-dropping and minimal CPU/GPU overhead.
-- **Hardware Acceleration**: Auto-probed hardware decoders (D3D11VA, DXVA2, NVDEC, VAAPI).
-- **Subtitles Engine**: Full support for SRT, ASS, SSA, and WebVTT subtitles with styling, subtitle track switcher, and auto-detection.
-- **Playback Controls**: Micro frame-stepping, aspect ratio switching (16:9, 4:3, 21:9, Original, Fill), native screenshot capture, and audio track selection.
-
-### 🧲 BitTorrent Parser & File Browser
-- **Pure TypeScript Bencode Decoder**: Decodes any `.torrent` file in real time with SHA-1 InfoHash calculation.
-- **Interactive File Selection Browser**:
-  - Filter chips to instantly isolate **All**, **Audio only**, **Video only**, or specific extensions (`.mp3`, `.wav`, `.flac`, `.mp4`, `.mkv`).
-  - Selective import — choose only the exact tracks you want to add to your playlist.
-  - Total selected size counter and file counter in real time.
-- **Companion Artwork Matching**:
-  - Automatically identifies companion image files (e.g. `song.mp3` $\leftrightarrow$ `song.png` / `song.jpg`) and folder cover art (`cover.jpg`, `folder.jpg`, `poster.png`).
-  - Displays companion badges on each file and sets playlist cover art.
-- **BEP 19 Web Seed & Archive.org Streaming**:
-  - Automatically resolves `url-list`, `httpseeds`, and Archive.org download streams to direct, percent-encoded HTTPS URLs.
-  - Enables direct, instant online streaming of torrent tracks without waiting for full P2P downloads.
-
-### 🌐 Online M3U / M3U8 Playlist Streaming
-- **Native CORS-Bypass Streaming**: Fetches external playlists via the native Rust backend, bypassing browser cross-origin restrictions entirely.
-- **Auto-Categorization**: Automatically categorizes streams into **Audio (Music)** and **Video (Live TV)** with distinct badges.
-- **Archive.org Link Sanitization**: Automatically normalizes unencoded whitespace (`%20`), ampersands (`%26`), and enforces HTTPS redirects.
-- **Export & Import**: Export any playlist to clean `#EXTM3U` format or import remote URLs and local files with one click.
-
-### 🤖 AI Capabilities
-- **Live Captions (SenseVoice STT)**:
-  - Local, offline SenseVoice Speech-to-Text model (`model.int8.onnx` + Silero VAD, ~230 MB).
-  - Streaming, resumable, and cancellable downloader in Settings.
-- **AI Video Super-Resolution & Upscaling**:
-  - **FSRCNNX x2**: Real-time GLSL shader enhancement applied directly via mpv's pipeline.
-  - **Real-ESRGAN Compact x4**: Offline batch video upscaler utilizing ONNX Runtime and ffmpeg frame extraction.
+The application is currently Windows-focused. The native video surface and bundled `libmpv-2.dll` are Windows-specific, and macOS/Linux are not supported by the current release build.
 
 ---
 
-## 🏗️ Architecture
+## Key Features
 
-```
+### Audio Playback
+
+- Broad format support for MP3, FLAC, WAV, AAC, OGG, Opus, M4A, ALAC, AIFF, and other formats through libmpv.
+- Synchronized lyrics from LRCLIB with click-to-seek, title cleanup, transliteration-friendly matching, and an offline disk cache.
+- Shuffle, repeat off/all/one, queue reordering, play-next, add-to-queue, and gapless track transitions.
+- Artist information, favorites, recently played history, and a persistent SQLite-backed library.
+- Optional detachable desktop player widget enabled from Settings: a compact always-on-top window with artwork, progress, playback controls, an expandable queue, and a real video preview that borrows the running mpv surface. Drag it anywhere or close it from the widget.
+
+### Video Playback
+
+- Native Win32 child-window rendering for video frames.
+- Hardware decoding probes for D3D11VA, DXVA2, and NVDEC on Windows.
+- Subtitle support for SRT, ASS, SSA, and WebVTT, including track switching and automatic detection.
+- Frame stepping, aspect-ratio presets, audio track selection, and native screenshot capture.
+- Fullscreen mode, picture-in-picture mode, and configurable video filters.
+
+### File Associations and Single Instance
+
+- Windows file associations for common audio and video extensions.
+- "Open with" hands the file to the already running instance instead of starting a duplicate process.
+- The first file starts playing; additional files are imported into the library.
+
+### BitTorrent Parser and File Browser
+
+- TypeScript bencode decoder for `.torrent` files with SHA-1 info hash calculation.
+- File browser with filters for all files, audio, video, or specific extensions.
+- Selective import of exact tracks, with running file and size counters.
+- Companion artwork detection for sibling images and folder cover art.
+- BEP 19 web seed and Archive.org stream resolution for direct HTTPS playback of torrent tracks.
+
+### Online M3U / M3U8 Streaming
+
+- Remote playlist fetching through the Rust backend to bypass browser CORS restrictions.
+- Automatic categorization into audio or live video streams.
+- URL sanitization for whitespace, encoded ampersands, and HTTPS redirects.
+- Playlist export to `#EXTM3U` format and import from remote URLs or local files.
+
+### AI Capabilities
+
+- Local offline live captions using SenseVoice INT8 ONNX and Silero VAD, with a resumable model downloader in Settings.
+- Real-time FSRCNNX x2 shader enhancement through the mpv rendering pipeline.
+- Offline Real-ESRGAN x4 batch video upscaling using ONNX Runtime and ffmpeg frame extraction.
+
+---
+
+## Architecture
+
+```text
 slide-up/
-├── src/                          # Frontend (Vue 3 + TypeScript + Tailwind CSS)
-│   ├── components/               # AudioPlayer, VideoPlayer, MediaGrid, PlaybackDock, etc.
+├── src/                          # Frontend: Vue 3, TypeScript, Tailwind CSS
+│   ├── components/               # AudioPlayer, VideoPlayer, MediaGrid, PlaybackDock, PlayerWidget
 │   ├── composables/              # useLyrics, useArtistBio, useToast, useSubtitleAvailability
-│   ├── services/                 # tauri.ts (IPC bridge), lyrics.ts, artist.ts
-│   ├── stores/                   # Pinia stores (player, playlist, library, settings)
-│   ├── types/                    # TypeScript interfaces (media, lyrics, playlist)
-│   ├── utils/                    # torrent.ts (bencode & web seed parser), m3u.ts
-│   └── views/                    # Home, Playlists, Favorites, Recent, Settings, LiveTv
+│   ├── services/                 # tauri.ts IPC bridge, lyrics and artist services
+│   ├── stores/                   # Pinia stores: player, library, playlists, settings
+│   ├── types/                    # TypeScript interfaces
+│   ├── utils/                    # torrent.ts, m3u.ts
+│   └── views/                    # Home, Playlists, Favorites, Recent, Settings, Live TV
 │
-└── src-tauri/                    # Native Backend (Rust + Tauri 2)
+└── src-tauri/                    # Backend: Rust, Tauri 2, SQLite, mpv integration
     ├── src/
-    │   ├── commands/             # IPC command handlers (playback, playlists, lyrics, library)
-    │   ├── db/                   # SQLite database repository (rusqlite)
-    │   ├── mpv/                  # Dynamic libmpv-2 loader & Win32 child window embedding
-    │   ├── model_manager.rs      # Offline SenseVoice model downloader & manager
-    │   ├── upscaler_manager.rs   # Real-ESRGAN and FSRCNNX upscaling pipeline
-    │   └── lib.rs                # App entrypoint and Tauri plugin registrations
+    │   ├── commands/             # IPC command handlers
+    │   ├── db/                   # SQLite repository and migrations
+    │   ├── mpv/                  # libmpv dynamic loader and Win32 embedding
+    │   ├── model_manager.rs      # SenseVoice model lifecycle
+    │   ├── upscaler_manager.rs   # FSRCNNX and Real-ESRGAN pipeline
+    │   ├── widget.rs             # Detachable widget window lifecycle and docking
+    │   └── lib.rs                # Application entry point and plugin setup
+    ├── tauri.conf.json           # Window definitions, including the lazy widget window
+    ├── capabilities/             # Per-window Tauri permissions, including widget.json
     ├── binaries/                 # onnxruntime.dll
-    └── resources/                # libmpv-2.dll
+    └── resources/                # libmpv-2.dll, vulkan-1.dll
 ```
 
 ---
 
-## ⌨️ Default Keyboard Shortcuts
+## Keyboard Shortcuts
 
 | Shortcut | Action |
 | :--- | :--- |
-| `Space` | Play / Pause toggle |
-| `←` / `→` | Seek backward / forward 5 seconds |
-| `↑` / `↓` | Volume up / down (5% increments) |
-| `M` | Mute / Unmute audio |
-| `F` | Toggle fullscreen mode |
-| `Esc` | Exit fullscreen mode |
-| `N` / `P` | Next track / Previous track |
-| `Ctrl + O` | Open media files from computer |
-| `Ctrl + Shift + O` | Open entire folder into library |
+| `Space` | Play / Pause |
+| `Left Arrow` / `Right Arrow` | Seek backward / forward 5 seconds |
+| `Up Arrow` / `Down Arrow` | Volume up / down |
+| `M` | Mute / Unmute |
+| `F` | Toggle fullscreen |
+| `Esc` | Exit fullscreen |
+| `N` / `P` | Next / Previous track |
+| `Ctrl + O` | Open media files |
+| `Ctrl + Shift + O` | Open a media folder |
+
+Shortcuts can be customized in Settings.
 
 ---
 
-## 🛠️ Installation & Development
+## Installation and Development
 
 ### Prerequisites
-- **Node.js**: v18.0 or newer
-- **Rust**: v1.80 or newer (`rustup default stable`)
-- **Windows (x64)**: Required for embedded Win32 video rendering (macOS/Linux support native windows)
 
-### Setup Instructions
+- Node.js 18 or newer.
+- A stable Rust toolchain with Edition 2024 support.
+- Windows 10 / 11 x64 for the current release build, including native video embedding.
 
-1. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/bhsorg/slide-up.git
-   cd slide-up
-   ```
+### Setup
 
-2. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
+```bash
+git clone https://github.com/bhsorg/slide-up.git
+cd slide-up
+npm install
+```
 
-3. **Verify Native Binaries**:
-   Ensure `src-tauri/resources/libmpv-2.dll` and `src-tauri/binaries/onnxruntime.dll` are in place.
+Verify that the native binaries are present before building:
 
-4. **Run in Development Mode**:
-   ```bash
-   npm run tauri dev
-   ```
+```text
+src-tauri/resources/libmpv-2.dll
+src-tauri/resources/vulkan-1.dll
+src-tauri/binaries/onnxruntime.dll
+```
 
-5. **Build for Production**:
-   ```bash
-   npm run tauri build
-   ```
+### Development
 
----
+```bash
+npm run tauri dev
+```
 
-## 🔒 Security, Privacy & License
+### Production build
 
-- **Fully Offline Core**: All local media library scanning, audio tagging, and AI processing run 100% locally on your machine.
-- **Zero Telemetry**: No user tracking or behavioral telemetry.
-- **Secure Sandbox**: External web links and network streams strictly use secure HTTPS endpoints with verified fallbacks.
-- **Desktop Repository**: [https://github.com/bhsorg/slide-up](https://github.com/bhsorg/slide-up)
-- **Official Website / Blog**: [https://bloghindisupport.com](https://bloghindisupport.com)
-- **Android Version Repo**: [https://github.com/hinditutorpoint/slideup](https://github.com/hinditutorpoint/slideup)
-- **Android Version Website**: [https://hinditutorpoint.github.io/slideup/](https://hinditutorpoint.github.io/slideup/)
-- **License**: Slide Up is licensed under the **GNU General Public License v3.0 (GPLv3)**. Any modified distribution or fork must remain open source under the same license terms.
+```bash
+npm run tauri build
+```
+
+Release builds that publish updater artifacts require `TAURI_SIGNING_PRIVATE_KEY` in the environment, and optionally `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The public key configured in `tauri.conf.json` must match the signing key.
 
 ---
 
-## 🤝 Contributing
+## Security, Privacy and License
 
-Contributions are warmly welcome! Whether it's reporting a bug, proposing a new feature, improving documentation, or submitting a pull request:
-
-1. **Fork the Repository** on GitHub.
-2. **Create your Feature Branch**:
-   ```bash
-   git checkout -b feature/AmazingFeature
-   ```
-3. **Commit your Changes**:
-   ```bash
-   git commit -m "feat: add some amazing feature"
-   ```
-4. **Push to the Branch**:
-   ```bash
-   git push origin feature/AmazingFeature
-   ```
-5. **Open a Pull Request**: Submit your PR with a clear description of the enhancements.
-
-Feel free to open an issue in the [GitHub Issue Tracker](https://github.com/bhsorg/slide-up/issues) if you encounter any bugs or have feature suggestions.
+- Local library scanning, metadata extraction, and AI inference run on your machine.
+- Online features such as lyrics lookup, M3U streams, and torrent web seeds are opt-in.
+- Network requests are handled by the Rust backend; the webview does not receive unrestricted filesystem access.
+- No user tracking or behavioral telemetry.
+- Project source: [https://github.com/bhsorg/slide-up](https://github.com/bhsorg/slide-up)
+- Website / blog: [https://bloghindisupport.com](https://bloghindisupport.com)
+- Android edition: [https://github.com/hinditutorpoint/slideup](https://github.com/hinditutorpoint/slideup)
+- License: GNU General Public License v3.0. Modified distributions and forks must remain open source under the same terms.
 
 ---
 
-## 💖 Support & Donations
+## Contributing
 
-**Slide Up** is a completely free, open-source project created with passion to provide an exceptional, ad-free desktop media experience.
+Contributions are welcome through bug reports, feature proposals, documentation improvements, and pull requests.
 
-If you enjoy using Slide Up and want to support its ongoing development, new AI capabilities, and open-source maintenance, please consider buying a coffee! Every contribution keeps the project thriving.
+1. Fork the repository.
+2. Create a feature branch:
+
+   ```bash
+   git checkout -b feature/your-feature
+   ```
+
+3. Commit your changes:
+
+   ```bash
+   git commit -m "feat: describe your change"
+   ```
+
+4. Push the branch:
+
+   ```bash
+   git push origin feature/your-feature
+   ```
+
+5. Open a pull request with a clear description of the change.
+
+Please use the [GitHub issue tracker](https://github.com/bhsorg/slide-up/issues) for bugs and feature requests.
+
+---
+
+## Support
+
+Slide Up is free and open source. If it is useful to you and you want to support ongoing development, you can use the link below.
+
+[Buy Me A Coffee](https://buymeacoffee.com/hinditutorpoint)
+
+---
 
 <div align="center">
 
-<a href="https://buymeacoffee.com/hinditutorpoint" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50" style="height: 50px !important;width: 217px !important;" />
-</a>
+Maintained by [bhsorg](https://bloghindisupport.com) | [Desktop source](https://github.com/bhsorg/slide-up) | [Android edition](https://hinditutorpoint.github.io/slideup/)
 
-<br /><br />
-
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-hinditutorpoint-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/hinditutorpoint)
-
-</div>
-
----
-
-<div align="center">
-  <sub>Maintained by <strong><a href="https://bloghindisupport.com" target="_blank">bhsorg</a></strong> • <a href="https://github.com/bhsorg/slide-up" target="_blank">Desktop (GitHub)</a> • <a href="https://hinditutorpoint.github.io/slideup/" target="_blank">Android Edition</a></sub>
 </div>

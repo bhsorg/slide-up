@@ -145,10 +145,20 @@ unsafe extern "system" fn custom_wndproc(
                             let _ = app.emit("taskbar-action", "next");
                         }
                         BTN_EXIT => {
+                            if let Some(state) = app.try_state::<crate::state::AppState>() {
+                                let _ = state.mpv.stop();
+                            }
+                            // Give the borrowed video surface back before the
+                            // video widget is destroyed, otherwise mpv can hang
+                            // during shutdown and need a Ctrl+C to terminate.
+                            crate::widget::destroy(&app);
                             for (_, window) in app.webview_windows() {
                                 let _ = window.destroy();
                             }
-                            app.exit(0);
+                            // Destroying every window ends the event loop and
+                            // lets WebView2 clean up its window class. An
+                            // explicit exit() would skip that cleanup and log
+                            // error 1412 for Chrome_WidgetWin_0.
                         }
                         _ => {}
                     }

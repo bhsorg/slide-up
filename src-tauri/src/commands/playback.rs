@@ -347,6 +347,62 @@ pub fn sync_video_rect(
     state.mpv.sync_video_rect(px, py, pw, ph)
 }
 
+/// Move the native video surface into or out of the detachable video window.
+#[tauri::command]
+pub async fn set_widget_video(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    active: bool,
+) -> Result<()> {
+    // Reparenting the native HWND must happen on the main thread. Wait for the
+    // move to finish so a video window is never hidden before the surface leaves it.
+    let thread_app = app.clone();
+    let thread_state = state.inner().clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(thread_state.mpv.set_widget_video(&thread_app, active));
+    })
+    .map_err(|error| crate::error::AppError::native(error.to_string()))?;
+    receiver
+        .await
+        .map_err(|error| crate::error::AppError::native(error.to_string()))??;
+    Ok(())
+}
+
+/// Position the video window's borrowed surface in physical pixels.
+#[tauri::command]
+pub async fn sync_widget_video_rect(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    x: i64,
+    y: i64,
+    width: i64,
+    height: i64,
+    radius: i64,
+) -> Result<()> {
+    use tauri::Manager;
+    let scale = app
+        .get_webview_window(crate::widget::VIDEO_LABEL)
+        .and_then(|window| window.scale_factor().ok())
+        .unwrap_or(1.0);
+    let px = (x as f64 * scale).round() as i64;
+    let py = (y as f64 * scale).round() as i64;
+    let pw = (width as f64 * scale).round() as i64;
+    let ph = (height as f64 * scale).round() as i64;
+    let pr = (radius as f64 * scale).round() as i64;
+    // SetWindowPos on the borrowed HWND is main-thread work as well.
+    let thread_state = state.inner().clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(thread_state.mpv.sync_widget_video_rect(px, py, pw, ph, pr));
+    })
+    .map_err(|error| crate::error::AppError::native(error.to_string()))?;
+    receiver
+        .await
+        .map_err(|error| crate::error::AppError::native(error.to_string()))??;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn set_surface_visible(state: State<'_, AppState>, visible: bool) -> Result<()> {
     state.mpv.set_surface_visible(visible)

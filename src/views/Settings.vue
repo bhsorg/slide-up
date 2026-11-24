@@ -401,6 +401,53 @@ async function resetAll() {
                 <input type="checkbox" class="toggle" :checked="settings.settings.taskbarControls" @change="save({ taskbarControls: ($event.target as HTMLInputElement).checked })" />
               </div>
             </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Desktop player widget</div>
+                <div class="setting-hint">Show the compact always-on-top player when Slide Up starts.</div>
+              </div>
+              <div class="setting-control">
+                <input type="checkbox" class="toggle" :checked="settings.settings.playerWidget" @change="save({ playerWidget: ($event.target as HTMLInputElement).checked })" />
+              </div>
+            </div>
+            <div v-if="settings.settings.playerWidget" class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Minimum opacity — {{ settings.settings.playerWidgetMinOpacity }}%</div>
+                <div class="setting-hint">Used when the pointer is away from the widget.</div>
+              </div>
+              <div class="setting-control">
+                <input
+                  type="range"
+                  min="0"
+                  :max="settings.settings.playerWidgetMaxOpacity"
+                  step="1"
+                  class="su-range w-48"
+                  :value="settings.settings.playerWidgetMinOpacity"
+                  :style="{ '--fill': `${settings.settings.playerWidgetMinOpacity}%` }"
+                  aria-label="Minimum player widget opacity"
+                  @change="save({ playerWidgetMinOpacity: Number(($event.target as HTMLInputElement).value) })"
+                />
+              </div>
+            </div>
+            <div v-if="settings.settings.playerWidget" class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Maximum opacity — {{ settings.settings.playerWidgetMaxOpacity }}%</div>
+                <div class="setting-hint">Used while the pointer is over the widget.</div>
+              </div>
+              <div class="setting-control">
+                <input
+                  type="range"
+                  :min="settings.settings.playerWidgetMinOpacity"
+                  max="100"
+                  step="1"
+                  class="su-range w-48"
+                  :value="settings.settings.playerWidgetMaxOpacity"
+                  :style="{ '--fill': `${settings.settings.playerWidgetMaxOpacity}%` }"
+                  aria-label="Maximum player widget opacity"
+                  @change="save({ playerWidgetMaxOpacity: Number(($event.target as HTMLInputElement).value) })"
+                />
+              </div>
+            </div>
           </div>
         </section>
 

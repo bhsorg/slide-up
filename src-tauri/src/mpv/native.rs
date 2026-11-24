@@ -1,20 +1,19 @@
 //! Native Windows video surface.
 //!
-//! mpv renders into a child HWND. While the player is focused it is kept
-//! *below* the webview, whose transparent background lets the video show
-//! through while DOM controls, popovers and the context menu stay on top. When
-//! the window loses focus the HWND is moved above an opaque webview so the
-//! whole WebView2 surface does not have to be alpha-composited every frame.
+//! mpv renders into a child HWND. In the main player it sits below the webview
+//! so DOM controls stay on top; in the detached video window it sits above the
+//! empty viewport so the WebView cannot cover the picture.
 
 use crate::error::{AppError, Result};
 use std::ffi::c_void;
 use std::sync::{Once, OnceLock};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SetWindowPos, ShowWindow,
-    HWND_BOTTOM, WNDCLASSW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-    SWP_NOSIZE, WS_CHILD, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SetParent, SetWindowPos,
+    ShowWindow, HWND_BOTTOM, WNDCLASSW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOZORDER, SWP_NOSIZE, WS_CHILD, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 fn class_name() -> &'static [u16] {
@@ -62,7 +61,7 @@ impl VideoWindow {
         let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
         let hwnd = unsafe {
             CreateWindowExW(
-                0,
+                WS_EX_NOACTIVATE,
                 class_name().as_ptr(),
                 std::ptr::null(),
                 WS_CHILD | WS_VISIBLE,
@@ -91,6 +90,21 @@ impl VideoWindow {
         self.hwnd as isize
     }
 
+    /// Move the surface to a different top-level window.
+    ///
+    /// mpv keeps rendering into the same HWND, so no `wid` change is needed.
+    /// This is how the player widget shows real video frames without starting
+    /// a second mpv instance: the single child surface follows the active
+    /// video view between the main window and the widget.
+    pub fn set_parent(&self, parent: isize) {
+        if parent == 0 {
+            return;
+        }
+        unsafe {
+            SetParent(self.hwnd, parent as HWND);
+        }
+    }
+
     pub fn set_position(&self, x: i32, y: i32, width: i32, height: i32) {
         if width <= 0 || height <= 0 {
             return;
@@ -110,6 +124,28 @@ impl VideoWindow {
                 height,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
+        }
+    }
+
+    pub fn set_corner_radius(&self, width: i32, height: i32, radius: i32) {
+        if width <= 0 || height <= 0 || radius <= 0 {
+            return;
+        }
+        let diameter = radius.saturating_mul(2);
+        let region = unsafe { CreateRoundRectRgn(0, 0, width, height, diameter, diameter) };
+        if region.is_null() {
+            return;
+        }
+        if unsafe { SetWindowRgn(self.hwnd, region, 1) } == 0 {
+            unsafe {
+                DeleteObject(region);
+            }
+        }
+    }
+
+    pub fn clear_corner_radius(&self) {
+        unsafe {
+            SetWindowRgn(self.hwnd, std::ptr::null_mut(), 1);
         }
     }
 

@@ -78,6 +78,12 @@ export interface AppSettings {
   startMinimized: boolean;
   minimizeToTray: boolean;
   taskbarControls: boolean;
+  /** Show the compact always-on-top player widget on the desktop. */
+  playerWidget: boolean;
+  /** Opacity while the pointer is outside the desktop player widget (0-100). */
+  playerWidgetMinOpacity: number;
+  /** Opacity while the pointer is over the desktop player widget (0-100). */
+  playerWidgetMaxOpacity: number;
   customExtensions: CustomExtension[];
   /** Whether live captions are enabled (requires the model to be downloaded). */
   liveCaptionsEnabled: boolean;
@@ -133,6 +139,9 @@ export const defaultSettings = (): AppSettings => ({
   startMinimized: false,
   minimizeToTray: false,
   taskbarControls: false,
+  playerWidget: false,
+  playerWidgetMinOpacity: 10,
+  playerWidgetMaxOpacity: 100,
   customExtensions: [],
   liveCaptionsEnabled: false,
   captionDevice: "auto",

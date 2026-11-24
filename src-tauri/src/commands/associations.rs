@@ -29,8 +29,7 @@ use windows::Win32::System::Com::{
 };
 #[cfg(windows)]
 use windows::Win32::UI::Shell::{
-    ApplicationAssociationRegistration, ApplicationAssociationRegistrationUI,
-    IApplicationAssociationRegistration, IApplicationAssociationRegistrationUI, AL_EFFECTIVE,
+    ApplicationAssociationRegistration, IApplicationAssociationRegistration, AL_EFFECTIVE,
     AT_FILEEXTENSION, SHCNE_ASSOCCHANGED, SHCNF_FLUSH, SHChangeNotify,
 };
 
@@ -79,6 +78,15 @@ fn exe_path() -> Result<String> {
 /// Escape a value for use inside a .reg file string.
 fn escape_reg(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Format a raw value as a quoted .reg string literal.
+///
+/// `reg.exe` exits successfully even when a value line is malformed (the
+/// value is silently skipped), so every value must be quoted and escaped
+/// exactly once.
+fn reg_string(value: &str) -> String {
+    format!("\"{}\"", escape_reg(value))
 }
 
 fn apply_reg(content: &str) -> Result<()> {
@@ -239,29 +247,28 @@ fn build_register_content(exts: &[(String, String)], exe: &str) -> String {
         ));
     }
 
-    let escaped_exe = escape_reg(exe);
-    let icon = format!("\"{}\",0", escaped_exe);
-    let command = format!("\"{}\" \"%1\"", escaped_exe);
+    let icon = format!("\"{exe}\",0");
+    let command = format!("\"{exe}\" \"%1\"");
     content.push_str(&format!(
         "[HKEY_CURRENT_USER\\Software\\Classes\\{PROG_ID}]\n@=\"Slide Up Media File\"\n\n"
     ));
     content.push_str(&format!(
-        "[HKEY_CURRENT_USER\\Software\\Classes\\{PROG_ID}\\DefaultIcon]\n@=\"{}\"\n\n",
-        icon
+        "[HKEY_CURRENT_USER\\Software\\Classes\\{PROG_ID}\\DefaultIcon]\n@={}\n\n",
+        reg_string(&icon)
     ));
     content.push_str(&format!(
         "[HKEY_CURRENT_USER\\Software\\Classes\\{PROG_ID}\\shell\\open]\n@=\"Open with Slide Up\"\n\n"
     ));
     content.push_str(&format!(
-        "[HKEY_CURRENT_USER\\Software\\Classes\\{PROG_ID}\\shell\\open\\command]\n@=\"{}\"\n\n",
-        command
+        "[HKEY_CURRENT_USER\\Software\\Classes\\{PROG_ID}\\shell\\open\\command]\n@={}\n\n",
+        reg_string(&command)
     ));
 
     let app_key = format!("HKEY_CURRENT_USER\\Software\\Classes\\Applications\\{APP_EXE}");
     content.push_str(&format!("[{app_key}]\n@=\"Slide Up\"\n\n"));
     content.push_str(&format!(
-        "[{app_key}\\shell\\open\\command]\n@=\"{}\"\n\n",
-        command
+        "[{app_key}\\shell\\open\\command]\n@={}\n\n",
+        reg_string(&command)
     ));
     content.push_str(&format!("[{app_key}\\SupportedTypes]\n"));
     for (ext, _) in exts {
@@ -339,12 +346,32 @@ fn all_extensions(state: &AppState) -> Vec<(String, String)> {
     exts
 }
 
+fn prog_id_has_open_command() -> bool {
+    #[cfg(windows)]
+    {
+        let key = format!("HKCU\\Software\\Classes\\{PROG_ID}\\shell\\open\\command");
+        let output = Command::new("reg.exe")
+            .args(["query", &key, "/ve"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        matches!(output, Ok(result) if result.status.success()
+            && String::from_utf8_lossy(&result.stdout).contains(APP_EXE))
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 fn collect(state: &AppState) -> FileAssociations {
     let custom = state.settings.lock().unwrap().custom_extensions.clone();
+    // A `.ext` default that points at our ProgID is not enough: Windows can
+    // only launch the app when the ProgID has a usable open command.
+    let usable = prog_id_has_open_command();
     let map = |ext: &str, kind: &str, custom: bool| FileExtension {
         ext: ext.to_string(),
         kind: kind.to_string(),
-        registered: is_registered(ext),
+        registered: usable && is_registered(ext),
         custom,
     };
 
@@ -463,29 +490,17 @@ pub fn remove_custom_extension(
     Ok(collect(&state))
 }
 
-/// Open Windows Settings on the Default Apps page for Slide Up. Windows
-/// 10/11 can block silent default changes, so this gives the user the
-/// one-click confirmation path.
+/// Open Windows Settings on the Default Apps page for Slide Up.
+///
+/// The legacy `IApplicationAssociationRegistrationUI` COM class (`sud.dll`)
+/// is deprecated and returns `ERROR_NO_ASSOCIATION` (0x80070483) on current
+/// Windows builds, so use the documented `ms-settings:` URI instead.
 #[tauri::command]
 pub fn open_default_apps_settings() -> Result<()> {
     #[cfg(windows)]
     {
-        unsafe {
-            let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
-            let result: windows::core::Result<()> = (|| {
-                let ui: IApplicationAssociationRegistrationUI = CoCreateInstance(
-                    &ApplicationAssociationRegistrationUI,
-                    None,
-                    CLSCTX_INPROC_SERVER,
-                )?;
-                let app = wide(APP_REG_NAME);
-                ui.LaunchAdvancedAssociationUI(windows::core::PCWSTR(app.as_ptr()))
-            })();
-            if initialized {
-                CoUninitialize();
-            }
-            result.map_err(|error| AppError::native(format!("Could not open Default Apps: {error}")))
-        }
+        tauri_plugin_opener::open_url("ms-settings:defaultapps", None::<&str>)
+            .map_err(|error| AppError::native(format!("Could not open Default Apps: {error}")))
     }
     #[cfg(not(windows))]
     {

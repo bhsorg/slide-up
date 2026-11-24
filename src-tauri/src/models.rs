@@ -263,7 +263,25 @@ pub struct AppSettings {
     pub transparent_filter_dialog: bool,
     #[serde(default)]
     pub taskbar_controls: bool,
+    /// Show the compact always-on-top player widget on the desktop. Its
+    /// embedded preview and expandable queue live in the same window.
+    #[serde(default)]
+    pub player_widget: bool,
+    /// Opacity while the pointer is outside the desktop player widget (0-100).
+    #[serde(default = "default_player_widget_min_opacity")]
+    pub player_widget_min_opacity: i64,
+    /// Opacity while the pointer is over the desktop player widget (0-100).
+    #[serde(default = "default_player_widget_max_opacity")]
+    pub player_widget_max_opacity: i64,
     pub shortcuts: Shortcuts,
+}
+
+fn default_player_widget_min_opacity() -> i64 {
+    10
+}
+
+fn default_player_widget_max_opacity() -> i64 {
+    100
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,6 +357,9 @@ impl Default for AppSettings {
             video_gamma: 0,
             transparent_filter_dialog: false,
             taskbar_controls: false,
+            player_widget: false,
+            player_widget_min_opacity: default_player_widget_min_opacity(),
+            player_widget_max_opacity: default_player_widget_max_opacity(),
             shortcuts: Shortcuts {
                 play_pause: "Space".into(),
                 seek_back: "ArrowLeft".into(),

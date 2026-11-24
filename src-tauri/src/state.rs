@@ -275,6 +275,15 @@ impl AppState {
     }
 
     pub fn save_settings(&self, settings: &AppSettings) -> Result<()> {
+        if !(0..=100).contains(&settings.player_widget_min_opacity)
+            || !(0..=100).contains(&settings.player_widget_max_opacity)
+            || settings.player_widget_min_opacity > settings.player_widget_max_opacity
+        {
+            return Err(AppError::new(
+                crate::error::ErrorKind::Settings,
+                "Player widget opacity must be between 0 and 100%, with minimum no greater than maximum.",
+            ));
+        }
         let json = serde_json::to_string(settings)?;
         {
             let conn = self.db.lock().unwrap();
@@ -286,6 +295,9 @@ impl AppState {
             *guard = settings.clone();
             old
         };
+        if previous.player_widget != settings.player_widget {
+            crate::widget::sync(&self.app, settings.player_widget);
+        }
         self.mpv.apply_settings(settings, Some(&previous))?;
         if previous.shuffle != settings.shuffle {
             self.mpv.set_shuffle(settings.shuffle)?;

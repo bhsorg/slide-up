@@ -22,7 +22,63 @@
         "decorations": false,
         "dragDropEnabled": true,
         "backgroundColor": "#080D1D",
-        "visible": false
+        "visible": false,
+        "transparent": true,
+        "shadow": false
+      },
+      {
+        "label": "player-widget",
+        "url": "index.html",
+        "title": "Slide Up Player",
+        "width": 320,
+        "height": 100,
+        "minWidth": 320,
+        "minHeight": 100,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "focus": false,
+        "create": false
+      },
+      {
+        "label": "video-widget",
+        "url": "index.html",
+        "title": "Slide Up Video",
+        "width": 320,
+        "height": 240,
+        "minWidth": 320,
+        "minHeight": 240,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": true,
+        "visible": false,
+        "focus": false,
+        "create": false
+      },
+      {
+        "label": "playlist-widget",
+        "url": "index.html",
+        "title": "Slide Up Playlist",
+        "width": 320,
+        "height": 480,
+        "minWidth": 320,
+        "minHeight": 240,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": true,
+        "visible": false,
+        "focus": false,
+        "create": false
       }
     ],
     "security": {
@@ -40,6 +96,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "licenseFile": "../LICENSE",
     "resources": [
       "resources/libmpv-2.dll",
@@ -61,13 +118,33 @@
     },
     "fileAssociations": [
       {
-        "ext": ["mp4", "mkv", "avi", "mov", "webm", "wmv", "flv", "ts", "m4v", "3gp"],
+        "ext": [
+          "mp4",
+          "mkv",
+          "avi",
+          "mov",
+          "webm",
+          "wmv",
+          "flv",
+          "ts",
+          "m4v",
+          "3gp"
+        ],
         "name": "Video File",
         "description": "Video Media File",
         "role": "Viewer"
       },
       {
-        "ext": ["mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "wma"],
+        "ext": [
+          "mp3",
+          "flac",
+          "wav",
+          "m4a",
+          "aac",
+          "ogg",
+          "opus",
+          "wma"
+        ],
         "name": "Audio File",
         "description": "Audio Media File",
         "role": "Viewer"
