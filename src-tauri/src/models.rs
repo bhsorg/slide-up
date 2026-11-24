@@ -267,13 +267,31 @@ pub struct AppSettings {
     /// embedded preview and expandable queue live in the same window.
     #[serde(default)]
     pub player_widget: bool,
+    /// Hide the main window on close instead of quitting, leaving the desktop
+    /// widget and playback alive. Only applies when `player_widget` is enabled.
+    #[serde(default)]
+    pub keep_widget_on_close: bool,
     /// Opacity while the pointer is outside the desktop player widget (0-100).
     #[serde(default = "default_player_widget_min_opacity")]
     pub player_widget_min_opacity: i64,
     /// Opacity while the pointer is over the desktop player widget (0-100).
     #[serde(default = "default_player_widget_max_opacity")]
     pub player_widget_max_opacity: i64,
+    /// Last dragged widget position in physical pixels. `None` means dock.
+    #[serde(default)]
+    pub player_widget_x: Option<i64>,
+    #[serde(default)]
+    pub player_widget_y: Option<i64>,
     pub shortcuts: Shortcuts,
+}
+
+/// Queue state saved between launches: the last playlist that was playing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackSession {
+    pub queue: Vec<i64>,
+    pub current_index: usize,
+    pub name: String,
 }
 
 fn default_player_widget_min_opacity() -> i64 {
@@ -358,8 +376,11 @@ impl Default for AppSettings {
             transparent_filter_dialog: false,
             taskbar_controls: false,
             player_widget: false,
+            keep_widget_on_close: false,
             player_widget_min_opacity: default_player_widget_min_opacity(),
             player_widget_max_opacity: default_player_widget_max_opacity(),
+            player_widget_x: None,
+            player_widget_y: None,
             shortcuts: Shortcuts {
                 play_pause: "Space".into(),
                 seek_back: "ArrowLeft".into(),

@@ -19,13 +19,17 @@ mod taskbar;
 
 use db::schema;
 use db::Repository;
-use models::AppSettings;
+use models::{AppSettings, PlaybackSession};
 use onnx_caption_engine::CaptionDevice;
 use state::AppState;
 use std::fs;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
+
+fn started_from_autostart() -> bool {
+    std::env::args().skip(1).any(|arg| arg == "--from-autostart")
+}
 
 /// Media files passed to the process, ignoring the executable and flags.
 fn media_paths_from_args(args: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -35,12 +39,91 @@ fn media_paths_from_args(args: impl IntoIterator<Item = String>) -> Vec<String> 
         .collect()
 }
 
+fn media_available(media: &models::MediaItem) -> bool {
+    let path = &media.path;
+    path.starts_with("http://")
+        || path.starts_with("https://")
+        || std::path::Path::new(path).is_file()
+}
+
+/// Pick the first available item, starting at the preferred index.
+fn restorable_queue(
+    media: Vec<models::MediaItem>,
+    preferred: usize,
+    name: String,
+) -> Option<(Vec<models::MediaItem>, usize, String)> {
+    if media.is_empty() {
+        return None;
+    }
+    let preferred = preferred.min(media.len() - 1);
+    let mut order: Vec<usize> = (preferred..media.len()).collect();
+    order.extend(0..preferred);
+    let index = order
+        .into_iter()
+        .find(|&index| media_available(&media[index]))?;
+    Some((media, index, name))
+}
+
+/// Restore the last playlist as a paused queue. No play count is recorded and
+/// playback does not start by itself — the user presses play when ready.
+/// If there is no usable session, load the first library item instead.
+fn restore_playback_session(state: &AppState) {
+    let session = {
+        let conn = state.db.lock().unwrap();
+        match Repository::get_setting(&conn, "playback_session") {
+            Ok(Some(json)) => serde_json::from_str::<PlaybackSession>(&json).ok(),
+            _ => None,
+        }
+    };
+
+    let restored = session.and_then(|session| {
+        if session.queue.is_empty() {
+            return None;
+        }
+        let media: Vec<models::MediaItem> = {
+            let conn = state.db.lock().unwrap();
+            session
+                .queue
+                .iter()
+                .filter_map(|id| Repository::get_media(&conn, *id).ok().flatten())
+                .collect()
+        };
+        restorable_queue(media, session.current_index, session.name)
+    });
+
+    let Some((media, index, name)) = restored.or_else(|| {
+        let media = {
+            let conn = state.db.lock().unwrap();
+            let filter = models::MediaFilter {
+                kind: None,
+                favorite: None,
+                search: None,
+                limit: Some(200),
+                offset: None,
+            };
+            Repository::list_media(&conn, &filter).unwrap_or_default()
+        };
+        restorable_queue(media, 0, "Library".to_string())
+    }) else {
+        return;
+    };
+
+    let item = media[index].clone();
+    state.player.lock().unwrap().set_queue(media, index, name);
+    let _ = state.mpv.set_paused(true);
+    if state.mpv.load(&item).is_ok() {
+        let _ = state.mpv.set_paused(true);
+    }
+    state.emit_queue();
+}
+
 fn focus_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
+    crate::widget::sync_with_main_window(app);
 }
 
 /// Import OS-provided files and play the first one, off the UI thread.
@@ -92,6 +175,14 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                // Use the installer's product name so NSIS's default uninstall
+                // section deletes this exact HKCU Run value.
+                .app_name("Slide Up")
+                .args(["--from-autostart"])
+                .build(),
+        )
         .setup(|app| {
             let data_dir = {
                 #[cfg(debug_assertions)]
@@ -176,6 +267,7 @@ pub fn run() {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
+                        crate::widget::sync_with_main_window(&tray_handle);
                     }
                 })
                 .on_menu_event(move |app, event| {
@@ -195,13 +287,22 @@ pub fn run() {
                         return;
                     }
                     if event.id() == "tray_toggle" {
+                        let was_visible = app
+                            .get_webview_window("main")
+                            .map(|window| window.is_visible().unwrap_or(false))
+                            .unwrap_or(false);
                         if let Some(window) = app.get_webview_window("main") {
-                            if window.is_visible().unwrap_or(false) {
+                            if was_visible {
                                 let _ = window.hide();
                             } else {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
+                        }
+                        if was_visible {
+                            crate::widget::show_if_enabled(app);
+                        } else {
+                            crate::widget::sync_with_main_window(app);
                         }
                         return;
                     }
@@ -229,20 +330,37 @@ pub fn run() {
                 taskbar::setup_taskbar_buttons(&window);
 
                 window.on_window_event(move |event| {
+                    // Covers restoring the main window from the taskbar or by
+                    // clicking it: the widget must step aside when it returns.
+                    if let tauri::WindowEvent::Focused(true) = event {
+                        crate::widget::sync_with_main_window(&close_handle);
+                    }
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         let settings = close_state.settings.lock().unwrap().clone();
                         let is_playing = close_state.mpv.snapshot().status == models::PlayerStatus::Playing;
 
-                        if settings.taskbar_controls && is_playing {
+                        if settings.keep_widget_on_close && settings.player_widget {
+                            // Opt-in mini-player mode: hide the main window but
+                            // keep the widget and playback alive. A real quit is
+                            // still available from the tray menu / taskbar Exit,
+                            // both of which tear the widget down before exiting.
+                            api.prevent_close();
+                            if let Some(window) = close_handle.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
+                            widget::show_if_enabled(&close_handle);
+                        } else if settings.taskbar_controls && is_playing {
                             api.prevent_close();
                             if let Some(window) = close_handle.get_webview_window("main") {
                                 let _ = window.minimize();
                             }
+                            widget::show_if_enabled(&close_handle);
                         } else if settings.minimize_to_tray {
                             api.prevent_close();
                             if let Some(window) = close_handle.get_webview_window("main") {
                                 let _ = window.hide();
                             }
+                            widget::show_if_enabled(&close_handle);
                         } else {
                             // This is a real quit. Stop playback and destroy the
                             // hidden widget so no WebView2 window is left open.
@@ -259,22 +377,27 @@ pub fn run() {
                 });
             }
 
-            if startup.start_minimized {
+            // A sign-in launch shows only the desktop widget when one is
+            // enabled; ordinary launches keep their configured visibility.
+            let widget_only = started_from_autostart() && startup.player_widget;
+            let main_hidden = startup.start_minimized || widget_only;
+            if main_hidden {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
-            } else {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                }
+            } else if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
             }
 
             // Restore the optional desktop widget only after the main window
             // has its final visibility. Creating its WebView2 window before
             // that made it try to focus a window that was still hidden, which
             // could stall startup and leave the UI controls unresponsive.
-            if startup.player_widget {
-                widget::show(app.handle());
+            // With the full window open the widget stays out of the way.
+            if main_hidden {
+                widget::show_if_enabled(app.handle());
+            } else {
+                widget::sync_with_main_window(app.handle());
             }
 
             if startup.auto_scan_on_startup {
@@ -285,6 +408,8 @@ pub fn run() {
                     });
                 }
             }
+
+            restore_playback_session(&state);
 
             // Files passed on the command line (file association / "Open with")
             // are imported and the first one starts playing.
@@ -299,6 +424,10 @@ pub fn run() {
             commands::app::app_version,
             commands::app::open_external,
             commands::app::show_in_folder,
+            commands::app::show_main_window,
+            commands::app::show_widget_when_main_hidden,
+            commands::app::set_launch_at_startup,
+            commands::app::is_launch_at_startup,
             commands::app::fetch_url_text,
             commands::associations::get_file_associations,
             commands::associations::register_file_associations,

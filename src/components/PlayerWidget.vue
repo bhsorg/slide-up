@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -20,6 +20,7 @@ import {
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
 import { useSettingsStore } from "../stores/settings";
+import { useLyrics } from "../composables/useLyrics";
 import { api, events, onEvent } from "../services/tauri";
 import { formatDuration } from "../types/media";
 
@@ -31,6 +32,12 @@ const library = useLibraryStore();
 const player = usePlayerStore();
 const settings = useSettingsStore();
 const widgetWindow = getCurrentWindow();
+const {
+  activeLine,
+  load: loadLyrics,
+  clear: clearLyrics,
+  updatePosition: updateLyricPosition,
+} = useLyrics();
 
 const ready = ref(false);
 const volumeSliderVisible = ref(false);
@@ -67,6 +74,22 @@ const progress = computed(() =>
     ? (player.state.positionMs / player.state.durationMs) * 100
     : 0,
 );
+// Mirror the bottom dock: show the current lyric line for audio tracks only.
+watch(
+  () => player.state.current?.id,
+  () => {
+    const item = player.state.current;
+    if (item && !isVideo.value) void loadLyrics(item);
+    else clearLyrics();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => player.state.positionMs,
+  (positionMs) => updateLyricPosition(positionMs),
+);
+
 const widgetOpacityStyle = computed(() => {
   const minimum = Math.max(0, Math.min(100, settings.settings.playerWidgetMinOpacity));
   const maximum = Math.max(
@@ -112,6 +135,8 @@ onMounted(() => {
 
   void (async () => {
     // Reveal first: a slow IPC call must never leave the widget unseen.
+    // Rust clears always-on-top while the main window is open, so the widget
+    // drops behind the player instead of covering it.
     await widgetWindow.show().catch(() => {});
 
     await Promise.allSettled([settings.initialize(), player.initialize()]);
@@ -313,11 +338,8 @@ async function togglePlayback() {
 }
 
 async function openMainWindow() {
-  const main = await WebviewWindow.getByLabel("main");
-  if (!main) return;
-  await main.unminimize().catch(() => {});
-  await main.show().catch(() => {});
-  await main.setFocus().catch(() => {});
+  // The Rust command restores the window and hides this widget in one step.
+  await api.restoreMainWindow();
 }
 
 async function closeWidget() {
@@ -325,6 +347,11 @@ async function closeWidget() {
     const currentSettings = await api.getSettings();
     if (currentSettings.playerWidget) {
       await api.updateSettings({ ...currentSettings, playerWidget: false });
+    }
+    // In mini-player mode the main window is hidden. Closing the widget must
+    // bring it back, otherwise the app is left running with no visible window.
+    if (currentSettings.keepWidgetOnClose) {
+      await openMainWindow();
     }
   } finally {
     // Hide, do not destroy: recreating the WebView2 window on every toggle
@@ -393,6 +420,8 @@ function onDragEnd(event: PointerEvent) {
     void widgetWindow.setPosition(position).catch((error: unknown) => {
       widgetError.value = String(error);
     });
+    // Remember the drop spot so the widget returns here after a restart.
+    void settings.patch({ playerWidgetX: position.x, playerWidgetY: position.y }).catch(() => {});
   }
 }
 
@@ -430,7 +459,10 @@ function toggleVolumeSlider() {
 
         <div class="meta">
           <div class="title" :title="current?.title">{{ current?.title || "Slide Up" }}</div>
-          <div class="subtitle" :title="subtitle">{{ subtitle }}</div>
+          <div v-if="!isVideo && activeLine?.text" class="subtitle lyric" :title="activeLine.text">
+            ♪ {{ activeLine.text }}
+          </div>
+          <div v-else class="subtitle" :title="subtitle">{{ subtitle }}</div>
         </div>
 
         <div class="header-actions">
@@ -640,6 +672,11 @@ function toggleVolumeSlider() {
   color: var(--text-secondary);
   font-size: 10px;
   line-height: 1.15;
+}
+
+.subtitle.lyric {
+  color: var(--accent-purple, #8b5cf6);
+  font-weight: 500;
 }
 
 .header-actions {

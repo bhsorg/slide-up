@@ -42,6 +42,53 @@ pub fn show_in_folder(path: String) -> Result<()> {
     Ok(())
 }
 
+/// Show the desktop widget after the main window is minimized or hidden.
+#[tauri::command]
+pub fn show_widget_when_main_hidden(app: tauri::AppHandle) -> Result<()> {
+    crate::widget::show_if_enabled(&app);
+    Ok(())
+}
+
+/// Restore the full window from the desktop widget and step the widget aside.
+#[tauri::command]
+pub fn show_main_window(app: tauri::AppHandle) -> Result<()> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    crate::widget::sync_with_main_window(&app);
+    Ok(())
+}
+
+/// Register or remove the per-user Windows startup entry. The OS entry is the
+/// source of truth, so the setting is queried from the OS rather than mirrored
+/// into our own settings file.
+#[tauri::command]
+pub fn set_launch_at_startup(app: tauri::AppHandle, enabled: bool) -> Result<()> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    if enabled {
+        autolaunch
+            .enable()
+            .map_err(|err| AppError::native(format!("Could not enable startup launch: {err}")))?;
+    } else {
+        autolaunch
+            .disable()
+            .map_err(|err| AppError::native(format!("Could not disable startup launch: {err}")))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn is_launch_at_startup(app: tauri::AppHandle) -> Result<bool> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|err| AppError::native(format!("Could not check startup launch: {err}")))
+}
+
 #[tauri::command]
 pub async fn fetch_url_text(url: String) -> Result<String> {
     let client = reqwest::Client::builder()

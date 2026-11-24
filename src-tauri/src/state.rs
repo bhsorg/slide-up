@@ -193,6 +193,22 @@ impl AppState {
                 "name": context.name,
             }),
         );
+
+        // Remember the last queue so a restart can restore the same playlist.
+        // Save only ids: media rows already hold every other field, and this
+        // runs on every track change, so the payload must stay tiny.
+        let session = crate::models::PlaybackSession {
+            queue: context.queue.iter().map(|item| item.id).collect(),
+            current_index: context.current_index.unwrap_or(0),
+            name: context.name.clone(),
+        };
+        drop(context);
+        if let Ok(json) = serde_json::to_string(&session) {
+            // Never block playback if another operation holds the database.
+            if let Ok(conn) = self.db.try_lock() {
+                let _ = Repository::set_setting(&conn, "playback_session", &json);
+            }
+        }
     }
 
     pub fn play_media(&self, media: &MediaItem) -> Result<()> {

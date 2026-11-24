@@ -48,6 +48,10 @@ export const api = {
   getAppVersion: () => call<string>("app_version"),
   openExternal: (url: string) => call<void>("open_external", { url }),
   showInFolder: (path: string) => call<void>("show_in_folder", { path }),
+  restoreMainWindow: () => call<void>("show_main_window"),
+  showWidgetWhenMainHidden: () => call<void>("show_widget_when_main_hidden"),
+  setLaunchAtStartup: (enabled: boolean) => call<void>("set_launch_at_startup", { enabled }),
+  isLaunchAtStartup: () => call<boolean>("is_launch_at_startup"),
   fetchUrlText: (url: string) => call<string>("fetch_url_text", { url }),
 
   pickFiles: () => call<string[]>("pick_files"),

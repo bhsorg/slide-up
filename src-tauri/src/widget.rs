@@ -32,12 +32,63 @@ fn widget_state() -> &'static Mutex<WidgetState> {
 }
 
 /// Make the widget match its persisted setting, creating or hiding it.
+///
+/// The widget stays alive whenever the setting is on. While the full window is
+/// open it simply drops behind it in z-order instead of covering the player.
 pub fn sync(app: &AppHandle, enabled: bool) {
+    if !enabled {
+        hide(app);
+    } else {
+        show(app);
+        apply_z_order(app);
+    }
+}
+
+/// Show the widget when its setting is on, regardless of the main window.
+/// Used right after hiding/minimizing the main window, when its visibility may
+/// not have settled yet for an `is_visible()` check.
+pub fn show_if_enabled(app: &AppHandle) {
+    let enabled = widget_enabled(app);
     if enabled {
         show(app);
+        set_topmost(app, true);
     } else {
         hide(app);
     }
+}
+
+/// Re-apply the current setting after the main window's visibility changes.
+pub fn sync_with_main_window(app: &AppHandle) {
+    sync(app, widget_enabled(app));
+}
+
+fn widget_enabled(app: &AppHandle) -> bool {
+    app.try_state::<AppState>()
+        .and_then(|state| state.settings.lock().ok().map(|settings| settings.player_widget))
+        .unwrap_or(false)
+}
+
+/// Keep the widget above other apps, but never above the full player window.
+/// Tauri window commands must run on the main thread.
+fn apply_z_order(app: &AppHandle) {
+    let behind = main_window_visible(app);
+    let thread_app = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || set_topmost(&thread_app, !behind)) {
+        tracing::warn!("Could not update widget z-order: {error}");
+    }
+}
+
+fn set_topmost(app: &AppHandle, topmost: bool) {
+    if let Some(window) = app.get_webview_window(LABEL) {
+        let _ = window.set_always_on_top(topmost);
+    }
+}
+
+fn main_window_visible(app: &AppHandle) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
 }
 
 /// Show the widget, creating it on the main thread on first use.
@@ -81,7 +132,9 @@ pub fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(LABEL) {
         let _ = window.show();
     }
-    after_show(app);
+    // Do not re-focus the main window here: a Focused event would call back
+    // into this sync path. Focus is only needed right after creation.
+    queue_dock(app);
 }
 
 fn after_show(app: &AppHandle) {
@@ -144,6 +197,11 @@ fn create(app: &AppHandle) -> tauri::Result<()> {
         .ok_or(tauri::Error::WindowNotFound)?;
 
     let window = WebviewWindowBuilder::from_config(app, config)?.build()?;
+    // The config declares the widget always-on-top. If the full window is
+    // already open, clear that before Vue reveals the webview so it never
+    // flashes over the player.
+    let behind_main = main_window_visible(app);
+    let _ = window.set_always_on_top(!behind_main);
 
     #[cfg(windows)]
     {
@@ -207,11 +265,38 @@ fn dock(app: &AppHandle) {
 
     let x = right - width.round() as i32 - RIGHT_MARGIN;
     let y = bottom - height.round() as i32;
+    let (x, y) = remembered_position(app).unwrap_or((x, y));
     if let Some(window) = app.get_webview_window(LABEL) {
         let _ = window.set_position(tauri::Position::Physical(
             tauri::PhysicalPosition::new(x, y),
         ));
     }
+}
+
+/// Use the user's last dragged position, clamped inside the monitor that
+/// contains it. Falls back to docking when the monitor layout has changed.
+fn remembered_position(app: &AppHandle) -> Option<(i32, i32)> {
+    let state = app.try_state::<AppState>()?;
+    let (x, y) = {
+        let settings = state.settings.lock().ok()?;
+        (settings.player_widget_x? as i32, settings.player_widget_y? as i32)
+    };
+    let size = app.get_webview_window(LABEL)?.inner_size().ok()?;
+    let monitor = app.available_monitors().ok()?.into_iter().find(|monitor| {
+        let origin = monitor.position();
+        let bounds = monitor.size();
+        x >= origin.x
+            && y >= origin.y
+            && x < origin.x + bounds.width as i32
+            && y < origin.y + bounds.height as i32
+    })?;
+    let area = monitor.work_area();
+    let max_x = area.position.x + area.size.width as i32 - size.width as i32;
+    let max_y = area.position.y + area.size.height as i32 - size.height as i32;
+    Some((
+        x.clamp(area.position.x, max_x.max(area.position.x)),
+        y.clamp(area.position.y, max_y.max(area.position.y)),
+    ))
 }
 
 fn queue_dock(app: &AppHandle) {

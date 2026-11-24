@@ -293,8 +293,12 @@ async function windowAction(action: "minimize" | "maximize" | "close") {
     const win = getCurrentWindow();
     if (action === "minimize") {
       await win.minimize();
+      await api.showWidgetWhenMainHidden();
     } else if (action === "maximize") {
       await win.toggleMaximize();
+    } else if (settings.settings.keepWidgetOnClose && settings.settings.playerWidget) {
+      await win.hide();
+      toast.info("Player widget stays on your desktop. Use it or the tray icon to restore.", "Slide Up");
     } else if (settings.settings.taskbarControls && player.isPlaying && !player.isVideo) {
       await win.minimize();
       toast.info("Music is playing in background. Use taskbar controls.", "Slide Up");
@@ -303,8 +307,11 @@ async function windowAction(action: "minimize" | "maximize" | "close") {
     } else {
       await win.close();
     }
-  } catch {
-    toast.info("Window controls are available in the desktop app.");
+  } catch (error) {
+    // Keep the user-facing message simple, but log the real IPC error so a
+    // missing capability or failed window command is diagnosable.
+    console.error("[Topbar] window action failed:", error);
+    toast.info("Window controls are available in the desktop app.", "Slide Up");
   }
 }
 </script>

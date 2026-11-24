@@ -80,10 +80,15 @@ export interface AppSettings {
   taskbarControls: boolean;
   /** Show the compact always-on-top player widget on the desktop. */
   playerWidget: boolean;
+  /** Hide the main window on close instead of quitting while the widget stays. */
+  keepWidgetOnClose: boolean;
   /** Opacity while the pointer is outside the desktop player widget (0-100). */
   playerWidgetMinOpacity: number;
   /** Opacity while the pointer is over the desktop player widget (0-100). */
   playerWidgetMaxOpacity: number;
+  /** Last dragged widget position in physical pixels; null docks bottom-right. */
+  playerWidgetX: number | null;
+  playerWidgetY: number | null;
   customExtensions: CustomExtension[];
   /** Whether live captions are enabled (requires the model to be downloaded). */
   liveCaptionsEnabled: boolean;
@@ -140,8 +145,11 @@ export const defaultSettings = (): AppSettings => ({
   minimizeToTray: false,
   taskbarControls: false,
   playerWidget: false,
+  keepWidgetOnClose: false,
   playerWidgetMinOpacity: 10,
   playerWidgetMaxOpacity: 100,
+  playerWidgetX: null,
+  playerWidgetY: null,
   customExtensions: [],
   liveCaptionsEnabled: false,
   captionDevice: "auto",

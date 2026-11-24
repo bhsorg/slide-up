@@ -55,6 +55,34 @@ const activeTabMeta = computed(() => tabs.find((tab) => tab.id === activeTab.val
 
 const associations = ref<FileAssociations | null>(null);
 const assocBusy = ref(false);
+const launchAtStartup = ref(false);
+const launchBusy = ref(false);
+
+async function loadLaunchAtStartup() {
+  try {
+    // The Windows startup entry is the source of truth, so we read it from the
+    // OS rather than trusting a copy in our own settings file.
+    launchAtStartup.value = await api.isLaunchAtStartup();
+  } catch (error) {
+    toast.error(String(error), "Could not check Windows startup setting");
+  }
+}
+
+async function toggleLaunchAtStartup() {
+  if (launchBusy.value) return;
+  launchBusy.value = true;
+  try {
+    await api.setLaunchAtStartup(!launchAtStartup.value);
+    launchAtStartup.value = await api.isLaunchAtStartup();
+    toast.success(
+      launchAtStartup.value ? "Slide Up will launch at Windows sign-in." : "Windows startup launch disabled.",
+    );
+  } catch (error) {
+    toast.error(String(error), "Windows startup setting");
+  } finally {
+    launchBusy.value = false;
+  }
+}
 const customExt = ref("");
 const customKind = ref<"audio" | "video">("audio");
 const builtInCount = computed(
@@ -76,6 +104,7 @@ async function loadAssociations() {
 
 watch(activeTab, (tab) => {
   if (tab === "associations") void loadAssociations();
+  if (tab === "startup") void loadLaunchAtStartup();
 });
 
 async function runAssociationAction(action: () => Promise<FileAssociations>, message: string) {
@@ -367,6 +396,21 @@ async function resetAll() {
           <div class="panel-body">
             <div class="setting-row">
               <div class="setting-info">
+                <div class="setting-name">Launch at Windows sign-in</div>
+                <div class="setting-hint">Start Slide Up automatically when you sign in. With the desktop widget enabled, only the widget appears.</div>
+              </div>
+              <div class="setting-control">
+                <input
+                  type="checkbox"
+                  class="toggle"
+                  :checked="launchAtStartup"
+                  :disabled="launchBusy"
+                  @change="toggleLaunchAtStartup"
+                />
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
                 <div class="setting-name">Scan library on startup</div>
                 <div class="setting-hint">Check the default folder for new media when the app opens.</div>
               </div>
@@ -404,10 +448,19 @@ async function resetAll() {
             <div class="setting-row">
               <div class="setting-info">
                 <div class="setting-name">Desktop player widget</div>
-                <div class="setting-hint">Show the compact always-on-top player when Slide Up starts.</div>
+                <div class="setting-hint">Show the compact always-on-top player on your desktop. It stays visible but drops behind the main window while the full player is open.</div>
               </div>
               <div class="setting-control">
                 <input type="checkbox" class="toggle" :checked="settings.settings.playerWidget" @change="save({ playerWidget: ($event.target as HTMLInputElement).checked })" />
+              </div>
+            </div>
+            <div v-if="settings.settings.playerWidget" class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Keep widget when window closes</div>
+                <div class="setting-hint">Closing the main window hides it and leaves the compact player on your desktop. Restore from the widget or tray; quit from the tray menu.</div>
+              </div>
+              <div class="setting-control">
+                <input type="checkbox" class="toggle" :checked="settings.settings.keepWidgetOnClose" @change="save({ keepWidgetOnClose: ($event.target as HTMLInputElement).checked })" />
               </div>
             </div>
             <div v-if="settings.settings.playerWidget" class="setting-row">
