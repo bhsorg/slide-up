@@ -118,7 +118,7 @@ function onDragStart(event: MouseEvent) {
       <div v-else-if="!filteredQueue.length" class="queue-empty">No matching tracks.</div>
       <div v-else class="queue" data-no-drag>
         <button
-          v-for="{ item, index } in filteredQueue"
+          v-for="{ item, index, thumbnailUrl } in filteredQueue"
           :key="`${item.id}-${index}`"
           class="queue-row"
           :class="{ current: index === player.currentIndex }"
