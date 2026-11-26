@@ -11,6 +11,12 @@ export const useLibraryStore = defineStore("library", () => {
   const recent = ref<MediaItem[]>([]);
   const search = ref("");
   const matchedLyricsMediaIds = ref<Set<number>>(new Set());
+  // Video covers are decrypted data URLs from the active workspace's cache.
+  const videoCovers = ref<Record<number, string>>({});
+  const coverPending = new Set<number>();
+  const coverFailed = new Set<number>();
+  const coverOrder: number[] = [];
+  const COVER_CACHE_LIMIT = 200;
   const kindFilter = ref<"all" | "audio" | "video">("all");
   const favoritesOnly = ref(false);
   const sortBy = ref<SortKey>("added");
@@ -79,11 +85,81 @@ export const useLibraryStore = defineStore("library", () => {
     return convertFileSrc(path);
   }
 
+  type CoverSource = Pick<MediaItem, "id" | "kind" | "thumbnailPath">;
+  function coverUrl(item: CoverSource | null | undefined): string | undefined {
+    if (!item) return undefined;
+    if (item.kind === "video") {
+      // Lazy generation: the first component that renders a video cover asks
+      // the backend to decrypt or capture it once per media id.
+      if (
+        !videoCovers.value[item.id] &&
+        !coverFailed.has(item.id) &&
+        !coverPending.has(item.id)
+      ) {
+        void requestVideoCover(item);
+      }
+      return videoCovers.value[item.id];
+    }
+    return thumbnailUrl(item.thumbnailPath);
+  }
+
+  async function requestVideoCover(item: CoverSource) {
+    if (
+      item.kind !== "video" ||
+      videoCovers.value[item.id] ||
+      coverFailed.has(item.id) ||
+      coverPending.has(item.id)
+    ) {
+      return;
+    }
+    coverPending.add(item.id);
+    try {
+      const url = await api.getVideoCover(item.id);
+      if (url) {
+        const existing = coverOrder.indexOf(item.id);
+        if (existing >= 0) coverOrder.splice(existing, 1);
+        coverOrder.push(item.id);
+        videoCovers.value[item.id] = url;
+        while (coverOrder.length > COVER_CACHE_LIMIT) {
+          const oldest = coverOrder.shift();
+          if (oldest !== undefined) delete videoCovers.value[oldest];
+        }
+      } else {
+        // No cover could be generated; do not retry on every render.
+        coverFailed.add(item.id);
+      }
+    } catch (error) {
+      coverFailed.add(item.id);
+      console.warn("getVideoCover failed:", error);
+    } finally {
+      coverPending.delete(item.id);
+    }
+  }
+
+  function clearCovers() {
+    videoCovers.value = {};
+    coverPending.clear();
+    coverFailed.clear();
+    coverOrder.length = 0;
+  }
+
   function resetFilters() {
     search.value = "";
     matchedLyricsMediaIds.value.clear();
     kindFilter.value = "all";
     favoritesOnly.value = false;
+  }
+
+  function resetLocal() {
+    // Drop everything that came from the previous workspace before the new
+    // workspace data is loaded.
+    clearCovers();
+    resetFilters();
+    items.value = [];
+    recent.value = [];
+    scanning.value = false;
+    scanStatus.value = "";
+    lastScan.value = null;
   }
 
   // Debounced search for lyrics in database when search query changes
@@ -122,7 +198,15 @@ export const useLibraryStore = defineStore("library", () => {
     initialized.value = true;
     await refresh();
     unlisteners.push(
-      await onEvent<void>(events.libraryChanged, () => refresh()),
+      await onEvent<void>(events.libraryChanged, () => {
+        clearCovers();
+        void refresh();
+      }),
+      await onEvent<void>(events.workspaceChanged, () => {
+        // Never leave the previous workspace's media, recents or covers visible.
+        resetLocal();
+        void refresh();
+      }),
       await onEvent<string>(events.scanProgress, (message) => {
         scanStatus.value = message;
       }),
@@ -256,6 +340,11 @@ export const useLibraryStore = defineStore("library", () => {
     visible,
     byId,
     thumbnailUrl,
+    videoCovers,
+    coverUrl,
+    requestVideoCover,
+    clearCovers,
+    resetLocal,
     resetFilters,
     refresh,
     initialize,

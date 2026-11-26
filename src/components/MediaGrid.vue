@@ -44,6 +44,7 @@ const title = computed(() => props.contextName ?? "Media");
 // badge. Results are cached by the composable across views and re-renders.
 watch(() => props.items, (items) => {
   void subtitles.checkMany(items);
+  for (const item of items) void library.requestVideoCover(item);
 }, { immediate: true });
 
 function hasCaption(item: MediaItem): boolean {
@@ -395,8 +396,8 @@ async function onMenuSelect(index: number) {
         <button type="button" class="block w-full text-left" @click="playAt(index)">
           <div class="relative aspect-square overflow-hidden bg-elevated">
             <img
-              v-if="item.thumbnailPath"
-              :src="library.thumbnailUrl(item.thumbnailPath)"
+              v-if="library.coverUrl(item)"
+              :src="library.coverUrl(item)"
               :alt="item.title"
               class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
               loading="lazy"
@@ -484,8 +485,8 @@ async function onMenuSelect(index: number) {
           </button>
           <button type="button" class="relative h-10 w-10 overflow-hidden rounded-lg bg-elevated" :title="`Play ${item.title}`" @click="playAt(index)">
             <img
-              v-if="item.thumbnailPath"
-              :src="library.thumbnailUrl(item.thumbnailPath)"
+              v-if="library.coverUrl(item)"
+              :src="library.coverUrl(item)"
               :alt="item.title"
               class="h-full w-full object-cover"
               loading="lazy"

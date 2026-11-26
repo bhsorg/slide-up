@@ -20,7 +20,7 @@ const picker = usePlaylistPicker();
 const artistBio = useArtistBio();
 
 const current = computed(() => player.state.current);
-const artwork = computed(() => current.value?.thumbnailPath ? library.thumbnailUrl(current.value.thumbnailPath) : null);
+const artwork = computed(() => library.coverUrl(current.value));
 const favorite = computed(() => (current.value ? (library.byId(current.value.id)?.favorite ?? false) : false));
 const bars = Array.from({ length: 28 }, (_, index) => index);
 

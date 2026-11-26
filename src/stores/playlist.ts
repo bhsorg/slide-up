@@ -42,6 +42,7 @@ export const usePlaylistStore = defineStore("playlist", () => {
   const tracks = ref<PlaylistTrack[]>([]);
   const loading = ref(false);
   const initialized = ref(false);
+  const privateVisible = ref(false);
   const unlisteners: Array<() => void> = [];
 
   const active = computed(() => playlists.value.find((p) => p.id === activeId.value) ?? null);
@@ -58,6 +59,7 @@ export const usePlaylistStore = defineStore("playlist", () => {
         updatedAt: p.updatedAt,
         trackCount: p.tracks.length,
         coverPath: p.coverPath ?? p.tracks.find((t) => t.thumbnailPath)?.thumbnailPath ?? null,
+        locked: false,
       }));
 
       playlists.value = [...customAsPlaylists, ...dbPlaylists];
@@ -463,12 +465,39 @@ export const usePlaylistStore = defineStore("playlist", () => {
     };
   }
 
+  function clearLocal() {
+    playlists.value = [];
+    tracks.value = [];
+    activeId.value = null;
+    privateVisible.value = false;
+  }
+
+  async function setLocked(id: number, locked: boolean) {
+    await api.setPlaylistLocked(id, locked);
+    if (locked && activeId.value === id) activeId.value = null;
+    await refresh();
+  }
+
+  async function revealPrivate(password?: string) {
+    privateVisible.value = await api.revealPrivatePlaylists(password);
+    await refresh();
+    return privateVisible.value;
+  }
+
+  async function hidePrivate() {
+    await api.hidePrivatePlaylists();
+    privateVisible.value = false;
+    await refresh();
+  }
+
   return {
     playlists,
     activeId,
     tracks,
     loading,
+    privateVisible,
     active,
+    clearLocal,
     refresh,
     initialize,
     dispose,
@@ -481,6 +510,9 @@ export const usePlaylistStore = defineStore("playlist", () => {
     removeMedia,
     reorder,
     play,
+    setLocked,
+    revealPrivate,
+    hidePrivate,
     exportPlaylist,
     importPlaylist,
     importM3uContent,

@@ -21,9 +21,7 @@ const filteredQueue = computed(() => {
     .map((item, index) => ({
       item,
       index,
-      thumbnailUrl: library.thumbnailUrl(
-        (item.id > 0 ? library.byId(item.id)?.thumbnailPath : null) ?? item.thumbnailPath,
-      ),
+      thumbnailUrl: library.coverUrl(item),
     }))
     .filter(({ item }) =>
       !query ||

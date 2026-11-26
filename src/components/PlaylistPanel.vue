@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { Plus, MoreVertical, Play, Heart, ListPlus, ListMusic, Trash2, X, Film, Captions, Info, Tv } from "@lucide/vue";
 import { usePlayerStore } from "../stores/player";
 import { useLibraryStore } from "../stores/library";
@@ -24,14 +23,6 @@ const picker = usePlaylistPicker();
 const properties = useMediaProperties();
 const storyboard = useStoryboardTask();
 const subtitles = useSubtitleAvailability();
-
-function playerThumbnail(path: string | null) {
-  if (!path) return undefined;
-  if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) {
-    return path;
-  }
-  return convertFileSrc(path);
-}
 
 const list = computed(() => {
   if (player.queue.length > 0) {
@@ -258,8 +249,8 @@ async function onMenuSelect(index: number) {
         <!-- Track Thumbnail -->
         <div class="relative h-9 w-9 shrink-0 overflow-hidden rounded-md bg-panel border border-line">
           <img
-            v-if="item.thumbnailPath"
-            :src="playerThumbnail(item.thumbnailPath)"
+            v-if="library.coverUrl(item)"
+            :src="library.coverUrl(item)"
             :alt="item.title"
             loading="lazy"
             class="h-full w-full object-cover z-1"

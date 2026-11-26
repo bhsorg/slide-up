@@ -3,9 +3,10 @@ import { computed, ref, watch } from "vue";
 import {
   ListMusic, Plus, Pencil, Trash2, Download, Upload, Play, X, ArrowUp, ArrowDown,
   Music2, MoreVertical, ListPlus, Heart, Film, Captions, Info, Tv, Globe, Link, FileText, Loader2,
-  CheckSquare, Square, Filter, Image as ImageIcon
+  CheckSquare, Square, Filter, Image as ImageIcon, LockKeyhole, LockOpen, Eye, EyeOff
 } from "@lucide/vue";
 import { usePlaylistStore } from "../stores/playlist";
+import { useWorkspaceStore } from "../stores/workspace";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
 import { useToast } from "../composables/useToast";
@@ -22,6 +23,7 @@ import ContextMenu from "../components/ContextMenu.vue";
 import type { ContextMenuItem } from "../types/contextMenu";
 
 const playlists = usePlaylistStore();
+const workspace = useWorkspaceStore();
 const library = useLibraryStore();
 const player = usePlayerStore();
 const toast = useToast();
@@ -278,6 +280,40 @@ async function remove(id: number) {
   }
 }
 
+async function togglePrivate(playlist: { id: number; name: string; locked: boolean }) {
+  if (playlist.id < 0) {
+    toast.info("Online playlists are managed locally and cannot be locked.");
+    return;
+  }
+  try {
+    await playlists.setLocked(playlist.id, !playlist.locked);
+    toast.info(playlist.locked ? "Playlist is no longer private." : "Playlist is now private.");
+  } catch (error) {
+    toast.error(String(error), "Could not change playlist privacy");
+  }
+}
+
+async function revealPrivate() {
+  const password = workspace.selected?.passwordProtected
+    ? window.prompt("Workspace password to reveal private playlists") ?? undefined
+    : undefined;
+  try {
+    const ok = await playlists.revealPrivate(password);
+    toast.info(ok ? "Private playlists revealed." : "Could not verify workspace credentials.");
+  } catch (error) {
+    toast.error(String(error), "Could not reveal private playlists");
+  }
+}
+
+async function hidePrivate() {
+  try {
+    await playlists.hidePrivate();
+    toast.info("Private playlists hidden.");
+  } catch (error) {
+    toast.error(String(error), "Could not hide private playlists");
+  }
+}
+
 async function play(index: number) {
   if (!playlists.active) return;
   try {
@@ -341,16 +377,16 @@ async function exportOne(id: number, name: string) {
 }
 
 type MenuState =
-  | { kind: "playlist"; x: number; y: number; id: number; name: string }
+  | { kind: "playlist"; x: number; y: number; id: number; name: string; locked: boolean }
   | { kind: "track"; x: number; y: number; index: number };
 
 const menu = ref<MenuState | null>(null);
 const subtitleAvailable = ref(false);
 
-function openPlaylistMenu(event: MouseEvent, playlist: { id: number; name: string }) {
+function openPlaylistMenu(event: MouseEvent, playlist: { id: number; name: string; locked: boolean }) {
   event.preventDefault();
   event.stopPropagation();
-  menu.value = { kind: "playlist", x: event.clientX, y: event.clientY, id: playlist.id, name: playlist.name };
+  menu.value = { kind: "playlist", x: event.clientX, y: event.clientY, id: playlist.id, name: playlist.name, locked: playlist.locked };
 }
 
 function openTrackMenu(event: MouseEvent, index: number) {
@@ -376,10 +412,13 @@ const menuDefinition = computed<{ items: ContextMenuItem[]; actions: string[] }>
       items: [
         { label: "Select playlist", icon: ListMusic },
         { label: "Rename", icon: Pencil },
+        current.id >= 0
+          ? { label: current.locked ? "Make public" : "Make private", icon: current.locked ? LockOpen : LockKeyhole }
+          : { label: "Online playlists cannot be locked", icon: Globe, disabled: true },
         { label: "Export M3U", icon: Download },
         { label: "Delete", icon: Trash2, danger: true },
       ],
-      actions: ["select", "rename", "export", "delete"],
+      actions: ["select", "rename", "private", "export", "delete"],
     };
   }
   const items: ContextMenuItem[] = [
@@ -424,6 +463,11 @@ async function onMenuSelect(index: number) {
         renamingId.value = current.id;
         renameValue.value = current.name;
         break;
+      case "private": {
+        const target = playlists.playlists.find((p) => p.id === current.id);
+        if (target) await togglePrivate(target);
+        break;
+      }
       case "export":
         await exportOne(current.id, current.name);
         break;
@@ -510,6 +554,19 @@ async function onMenuSelect(index: number) {
         </button>
         <button type="button" class="playlist-action flex-1" :disabled="!playlists.active" @click="exportActive"><Download :size="13" /> Export</button>
       </div>
+      <button
+        type="button"
+        class="playlist-action w-full"
+        :title="playlists.privateVisible ? 'Hide private playlists again' : 'Verify workspace credential to show private playlists'"
+        @click="playlists.privateVisible ? hidePrivate() : revealPrivate()"
+      >
+        <template v-if="playlists.privateVisible">
+          <EyeOff :size="13" /> Hide private
+        </template>
+        <template v-else>
+          <Eye :size="13" /> Reveal private
+        </template>
+      </button>
       <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
         <div
           v-for="playlist in playlists.playlists"
@@ -526,6 +583,7 @@ async function onMenuSelect(index: number) {
               <div class="flex items-center gap-1.5 truncate text-[12px] font-semibold text-ink">
                 <Globe v-if="playlist.id < 0 && !playlist.coverPath" :size="12" class="shrink-0 text-purple"
                   title="Online / Torrent Playlist" />
+                <LockKeyhole v-if="playlist.locked" :size="12" class="shrink-0 text-purple" title="Private playlist" />
                 <span class="truncate">{{ playlist.name }}</span>
               </div>
               <div class="text-[10px] text-faint">{{ playlist.trackCount }} track{{ playlist.trackCount === 1 ? "" : "s"

@@ -4,30 +4,32 @@
 
 mod commands;
 mod db;
+mod dialog_helper;
 mod error;
 mod events;
 mod metadata;
 mod model_manager;
 mod onnx_caption_engine;
 mod models;
+mod protected_cache;
 mod mpv;
 mod state;
 mod upscaler_manager;
 mod widget;
+pub mod workspace;
 #[cfg(windows)]
 mod taskbar;
 
-use db::schema;
 use db::Repository;
-use models::{AppSettings, PlaybackSession};
+use models::PlaybackSession;
 use onnx_caption_engine::CaptionDevice;
-use state::AppState;
+use state::{ActiveWorkspace, AppState};
 use std::fs;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
-fn started_from_autostart() -> bool {
+pub(crate) fn started_from_autostart() -> bool {
     std::env::args().skip(1).any(|arg| arg == "--from-autostart")
 }
 
@@ -68,8 +70,11 @@ fn restorable_queue(
 /// playback does not start by itself — the user presses play when ready.
 /// If there is no usable session, load the first library item instead.
 fn restore_playback_session(state: &AppState) {
+    if state.is_locked() {
+        return;
+    }
     let session = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db().unwrap();
         match Repository::get_setting(&conn, "playback_session") {
             Ok(Some(json)) => serde_json::from_str::<PlaybackSession>(&json).ok(),
             _ => None,
@@ -81,7 +86,7 @@ fn restore_playback_session(state: &AppState) {
             return None;
         }
         let media: Vec<models::MediaItem> = {
-            let conn = state.db.lock().unwrap();
+            let conn = state.unlocked_db().unwrap();
             session
                 .queue
                 .iter()
@@ -93,7 +98,7 @@ fn restore_playback_session(state: &AppState) {
 
     let Some((media, index, name)) = restored.or_else(|| {
         let media = {
-            let conn = state.db.lock().unwrap();
+            let conn = state.unlocked_db().unwrap();
             let filter = models::MediaFilter {
                 kind: None,
                 favorite: None,
@@ -136,7 +141,7 @@ fn play_launched_files(state: AppState, paths: Vec<String>) {
         }
         let Some(path) = playback_path else { return };
         let media = {
-            let conn = state.db.lock().unwrap();
+            let conn = state.unlocked_db().unwrap();
             Repository::get_media_by_path(&conn, &path)
         };
         match media {
@@ -196,17 +201,82 @@ pub fn run() {
             };
             fs::create_dir_all(&data_dir)?;
             fs::create_dir_all(data_dir.join("thumbnails"))?;
-            fs::create_dir_all(data_dir.join("storyboards"))?;
             fs::create_dir_all(data_dir.join("screenshots"))?;
 
-            let database_path = data_dir.join("slideup.db");
-            let connection = rusqlite::Connection::open(&database_path)?;
-            schema::migrate(&connection)?;
-
-            let settings = match Repository::get_setting(&connection, "app")? {
-                Some(json) => serde_json::from_str::<AppSettings>(&json).unwrap_or_default(),
-                None => AppSettings::default(),
+            // Global registry only; library data lives in per-workspace
+            // SQLCipher databases so isolation is enforced by the file path.
+            let app_db = workspace::open_app_db(&data_dir)?;
+            workspace::initialize_default(&app_db, &data_dir)?;
+            let active_id = workspace::last_active(&app_db)?
+                .unwrap_or_else(|| workspace::DEFAULT_WORKSPACE_ID.to_string());
+            let active_info = workspace::get_workspace(&app_db, &active_id)?;
+            let locked = active_info.as_ref().map(|info| info.locked).unwrap_or(false);
+            let password_protected = active_info
+                .as_ref()
+                .map(|info| info.password_protected)
+                .unwrap_or(false);
+            // A password-protected workspace can be unlocked without DPAPI, so
+            // a failed machine-level unwrap must not prevent the app from
+            // starting the unlock screen.
+            let keys = match workspace::load_keys(&app_db, &active_id) {
+                Ok(keys) => keys,
+                Err(_) if locked && password_protected => workspace::blank_keys(&active_id),
+                Err(err) => return Err(Box::new(err)),
             };
+            let connection = if locked {
+                // No plaintext data is reachable while a workspace is locked.
+                rusqlite::Connection::open_in_memory()?
+            } else {
+                workspace::open_library_db(&data_dir, &active_id, &keys)?
+            };
+
+            if !locked {
+                // One-time cleanup: video cover PNGs are no longer generated
+                // or stored. Leave audio artwork untouched.
+                let stale: Vec<(i64, String)> = {
+                    let mut stmt = connection.prepare(
+                        "SELECT id, thumbnail_path FROM media \
+                         WHERE kind = 'video' AND thumbnail_path IS NOT NULL",
+                    )?;
+                    let rows = stmt.query_map([], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                    })?;
+                    rows.filter_map(Result::ok).collect()
+                };
+                for (id, path) in stale {
+                    let cached = std::path::Path::new(&path);
+                    if cached.starts_with(&data_dir) {
+                        let _ = std::fs::remove_file(cached);
+                        let _ = connection.execute(
+                            "UPDATE media SET thumbnail_path = NULL WHERE id = ?1",
+                            [id],
+                        );
+                    }
+                }
+                // Old storyboard frames were plaintext PNGs under this shared
+                // folder. Encrypted frames live under workspaces/<id>/ now.
+                let legacy_storyboards = data_dir.join("storyboards");
+                if legacy_storyboards.exists() {
+                    let _ = std::fs::remove_dir_all(&legacy_storyboards);
+                }
+            }
+
+            let global_settings = app_db
+                .query_row(
+                    "SELECT value FROM global_settings WHERE key = 'app'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok();
+            let local_settings = if locked {
+                None
+            } else {
+                Repository::get_setting(&connection, "app")?
+            };
+            let settings = workspace::merge_settings(
+                global_settings.as_deref(),
+                local_settings.as_deref(),
+            )?;
 
             let mpv = mpv::MpvClient::new(app.handle().clone(), &data_dir)?;
             // Offline caption model lifecycle. Managed so every command shares
@@ -217,6 +287,15 @@ pub fn run() {
             let state = AppState::new(
                 app.handle().clone(),
                 connection,
+                app_db,
+                if locked {
+                    None
+                } else {
+                    Some(ActiveWorkspace {
+                        id: active_id,
+                        keys,
+                    })
+                },
                 mpv,
                 settings,
                 data_dir,
@@ -379,8 +458,19 @@ pub fn run() {
 
             // A sign-in launch shows only the desktop widget when one is
             // enabled; ordinary launches keep their configured visibility.
-            let widget_only = started_from_autostart() && startup.player_widget;
-            let main_hidden = startup.start_minimized || widget_only;
+            // A locked workspace must reveal the unlock screen instead of the
+            // widget, even on an autostart.
+            let workspace_locked = state.is_locked();
+            let multiple_workspaces = workspace::list_workspaces(&state.app_db.lock().unwrap())?.len() > 1;
+            // A chooser needs a visible main window; never hide it behind the
+            // widget while the user still has to pick a workspace.
+            let widget_only = !workspace_locked
+                && !multiple_workspaces
+                && started_from_autostart()
+                && startup.player_widget;
+            let main_hidden = !workspace_locked
+                && !multiple_workspaces
+                && (startup.start_minimized || widget_only);
             if main_hidden {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
@@ -426,11 +516,28 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::workspace::list_workspaces,
+            commands::workspace::active_workspace,
+            commands::workspace::create_workspace,
+            commands::workspace::switch_workspace,
+            commands::workspace::select_workspace,
+            commands::workspace::lock_workspace,
+            commands::workspace::unlock_workspace,
+            commands::workspace::unlock_workspace_with_password,
+            commands::workspace::set_workspace_password,
+            commands::workspace::clear_workspace_password,
+            commands::workspace::pending_workspace,
+            commands::workspace::rename_workspace,
+            commands::workspace::set_workspace_avatar,
+            commands::workspace::clear_workspace_avatar,
+            commands::workspace::delete_workspace,
+            commands::workspace::restore_workspace,
             commands::app::app_version,
             commands::app::open_external,
             commands::app::show_in_folder,
             commands::app::show_main_window,
             commands::app::show_widget_when_main_hidden,
+            commands::app::is_widget_only_launch,
             commands::app::set_launch_at_startup,
             commands::app::is_launch_at_startup,
             commands::app::fetch_url_text,
@@ -451,6 +558,8 @@ pub fn run() {
             upscaler_manager::download_upscaler_model,
             upscaler_manager::cancel_upscaler_download,
             upscaler_manager::delete_upscaler_model,
+            dialog_helper::begin_native_dialog,
+            dialog_helper::end_native_dialog,
             commands::library::pick_files,
             commands::library::pick_folder,
             commands::library::list_media,
@@ -464,6 +573,7 @@ pub fn run() {
             commands::library::scan_folder,
             commands::library::import_files,
             commands::library::get_thumbnail,
+            commands::library::get_video_cover,
             commands::library::get_storyboard_frame,
             commands::library::generate_storyboard,
             commands::library::has_storyboard,
@@ -506,6 +616,7 @@ pub fn run() {
             commands::playback::screenshot,
             commands::playback::sync_video_rect,
             commands::playback::set_widget_video,
+            commands::playback::set_widget_video_blur,
             commands::playback::sync_widget_video_rect,
             commands::playback::set_surface_visible,
             commands::playback::set_video_layer,
@@ -527,6 +638,9 @@ pub fn run() {
             commands::playlists::play_playlist,
             commands::playlists::export_playlist,
             commands::playlists::import_playlist,
+            commands::playlists::set_playlist_locked,
+            commands::playlists::reveal_private_playlists,
+            commands::playlists::hide_private_playlists,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::reset_settings,

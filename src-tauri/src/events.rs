@@ -10,6 +10,7 @@ pub const LIBRARY_SCAN_PROGRESS: &str = "library://scan-progress";
 pub const STORYBOARD_PROGRESS: &str = "storyboard://progress";
 pub const PLAYLISTS_CHANGED: &str = "playlists://changed";
 pub const SETTINGS_CHANGED: &str = "settings://changed";
+pub const WORKSPACE_CHANGED: &str = "workspace://changed";
 pub const TOAST: &str = "app://toast";
 pub const MODEL_DOWNLOAD_PROGRESS: &str = "model-download-progress";
 pub const UPSCALER_DOWNLOAD_PROGRESS: &str = "upscaler-download-progress";

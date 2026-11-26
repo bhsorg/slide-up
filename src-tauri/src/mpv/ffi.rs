@@ -311,30 +311,26 @@ mod tests {
         }
     }
 
-    /// Manual diagnostic: exercises the exact thumbnail-probe path used by the
+    /// Manual diagnostic: exercises the exact metadata-probe path used by the
     /// library scanner. Run with:
     /// `SLIDEUP_TEST_VIDEO=<file> cargo test --lib -- --ignored --nocapture`
     #[test]
     #[ignore = "requires a real video file via SLIDEUP_TEST_VIDEO"]
-    fn bundled_libmpv_probes_video_thumbnail() {
+    fn bundled_libmpv_probes_video_metadata() {
         let video = std::env::var("SLIDEUP_TEST_VIDEO")
             .expect("set SLIDEUP_TEST_VIDEO to a video file");
-        let data_dir = std::env::temp_dir().join("slideup-probe-test");
-        std::fs::create_dir_all(&data_dir).unwrap();
         let result = crate::metadata::video::probe(
             std::path::Path::new(&video),
             1,
-            &data_dir,
             false,
             None,
         )
         .expect("video probe failed");
         eprintln!(
-            "probe: duration={}ms {}x{} codec={:?} thumb={:?}",
-            result.duration_ms, result.width, result.height, result.codec, result.thumbnail_path
+            "probe: duration={}ms {}x{} codec={:?}",
+            result.duration_ms, result.width, result.height, result.codec
         );
         assert!(result.duration_ms > 0, "no duration reported");
-        assert!(result.thumbnail_path.is_some(), "no thumbnail generated");
     }
 
     fn write_test_wav() -> PathBuf {

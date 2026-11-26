@@ -7,6 +7,7 @@ export type ViewId =
   | "playlists"
   | "favorites"
   | "recent"
+  | "workspaces"
   | "settings"
   | "about";
 
@@ -73,6 +74,8 @@ export interface AppSettings {
   scanAudio: boolean;
   scanVideo: boolean;
   generateThumbnails: boolean;
+  /** Generate cached seek-preview frames for new videos. */
+  autoGenerateStoryboard: boolean;
   removeMissingOnScan: boolean;
   autoScanOnStartup: boolean;
   startMinimized: boolean;
@@ -139,6 +142,7 @@ export const defaultSettings = (): AppSettings => ({
   scanAudio: true,
   scanVideo: true,
   generateThumbnails: true,
+  autoGenerateStoryboard: false,
   removeMissingOnScan: false,
   autoScanOnStartup: false,
   startMinimized: false,

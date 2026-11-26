@@ -6,3 +6,4 @@ pub mod playback;
 pub mod playlists;
 pub mod settings;
 pub mod upscale;
+pub mod workspace;

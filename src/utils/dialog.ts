@@ -1,4 +1,5 @@
 import { ask } from "@tauri-apps/plugin-dialog";
+import { api } from "../services/tauri";
 
 export interface ConfirmOptions {
   title?: string;
@@ -15,6 +16,7 @@ export async function confirmAction(
   message: string,
   options: ConfirmOptions = {},
 ): Promise<boolean> {
+  await api.beginNativeDialog();
   try {
     return await ask(message, {
       title: options.title ?? "Slide Up Confirmation",
@@ -25,5 +27,7 @@ export async function confirmAction(
   } catch (err) {
     console.warn("Native dialog failed, falling back to window.confirm:", err);
     return window.confirm(message);
+  } finally {
+    await api.endNativeDialog();
   }
 }

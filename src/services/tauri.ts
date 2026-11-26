@@ -7,6 +7,22 @@ import type { Playlist, PlaylistTrack } from "../types/playlist";
 import type { ModelStatus, UpscalerModelStatus } from "../types/model";
 import type { CachedLyrics, LyricsResult } from "../types/lyrics";
 
+export interface WorkspaceInfo {
+  id: string;
+  name: string;
+  avatarPath: string | null;
+  createdAt: number;
+  updatedAt: number;
+  locked: boolean;
+  dbEncrypted: boolean;
+  passwordProtected: boolean;
+}
+
+export interface WorkspaceCreation {
+  workspace: WorkspaceInfo;
+  recoveryKey: string;
+}
+
 export interface AutoVideoFilters {
   brightness: number;
   contrast: number;
@@ -50,9 +66,35 @@ export const api = {
   showInFolder: (path: string) => call<void>("show_in_folder", { path }),
   restoreMainWindow: () => call<void>("show_main_window"),
   showWidgetWhenMainHidden: () => call<void>("show_widget_when_main_hidden"),
+  isWidgetOnlyLaunch: () => call<boolean>("is_widget_only_launch"),
   setLaunchAtStartup: (enabled: boolean) => call<void>("set_launch_at_startup", { enabled }),
   isLaunchAtStartup: () => call<boolean>("is_launch_at_startup"),
   fetchUrlText: (url: string) => call<string>("fetch_url_text", { url }),
+
+  // Strict workspaces: each one owns a separate encrypted database.
+  listWorkspaces: () => call<WorkspaceInfo[]>("list_workspaces"),
+  activeWorkspace: () => call<WorkspaceInfo | null>("active_workspace"),
+  createWorkspace: (name: string) => call<WorkspaceCreation>("create_workspace", { name }),
+  switchWorkspace: (id: string) => call<WorkspaceInfo>("switch_workspace", { id }),
+  selectWorkspace: (id: string) => call<WorkspaceInfo>("select_workspace", { id }),
+  lockWorkspace: () => call<WorkspaceInfo>("lock_workspace"),
+  unlockWorkspace: (id?: string) => call<WorkspaceInfo>("unlock_workspace", id ? { id } : undefined),
+  unlockWorkspaceWithPassword: (id: string, password: string) =>
+    call<WorkspaceInfo>("unlock_workspace_with_password", { id, password }),
+  setWorkspacePassword: (password: string) => call<void>("set_workspace_password", { password }),
+  clearWorkspacePassword: (password: string) => call<void>("clear_workspace_password", { password }),
+  pendingWorkspace: () => call<WorkspaceInfo>("pending_workspace"),
+  renameWorkspace: (id: string, name: string) => call<void>("rename_workspace", { id, name }),
+  setWorkspaceAvatar: (path: string) => call<WorkspaceInfo>("set_workspace_avatar", { path }),
+  clearWorkspaceAvatar: () => call<WorkspaceInfo>("clear_workspace_avatar"),
+  deleteWorkspace: (id: string) => call<void>("delete_workspace", { id }),
+  restoreWorkspace: (recoveryKey: string) =>
+    call<WorkspaceInfo>("restore_workspace", { recoveryKey }),
+
+  // Native dialogs are OS windows: drop always-on-top while they are open so
+  // they are not hidden behind the player (PiP / detached widgets).
+  beginNativeDialog: () => call<void>("begin_native_dialog"),
+  endNativeDialog: () => call<void>("end_native_dialog"),
 
   pickFiles: () => call<string[]>("pick_files"),
   pickFolder: () => call<string | null>("pick_folder"),
@@ -104,6 +146,7 @@ export const api = {
   syncVideoRect: (x: number, y: number, width: number, height: number) =>
     call<void>("sync_video_rect", { x, y, width, height }),
   setWidgetVideo: (active: boolean) => call<void>("set_widget_video", { active }),
+  setWidgetVideoBlur: (enabled: boolean) => call<void>("set_widget_video_blur", { enabled }),
   syncWidgetVideoRect: (x: number, y: number, width: number, height: number, radius: number) =>
     call<void>("sync_widget_video_rect", { x, y, width, height, radius }),
   setSurfaceVisible: (visible: boolean) => call<void>("set_surface_visible", { visible }),
@@ -115,6 +158,7 @@ export const api = {
   saveLyrics: (mediaId: number, result: LyricsResult | null) =>
     call<void>("save_lyrics", { mediaId, result }),
   searchLyrics: (query: string) => call<number[]>("search_lyrics", { query }),
+  getVideoCover: (mediaId: number) => call<string | null>("get_video_cover", { mediaId }),
   getStoryboardFrame: (mediaId: number, index: number) =>
     call<string | null>("get_storyboard_frame", { mediaId, index }),
   generateStoryboard: (mediaId: number) =>
@@ -149,6 +193,11 @@ export const api = {
     call<string | null>("export_playlist", { playlistId, name }),
   importPlaylist: (playlistName?: string) =>
     call<number | null>("import_playlist", { playlistName: playlistName ?? null }),
+  setPlaylistLocked: (id: number, locked: boolean) =>
+    call<void>("set_playlist_locked", { id, locked }),
+  revealPrivatePlaylists: (password?: string) =>
+    call<boolean>("reveal_private_playlists", { password: password ?? null }),
+  hidePrivatePlaylists: () => call<void>("hide_private_playlists"),
 
   getSettings: () => call<AppSettings>("get_settings"),
   updateSettings: (settings: AppSettings) => call<void>("update_settings", { settings }),
@@ -200,6 +249,7 @@ export const events = {
   playerProgress: "player://progress",
   playerTracks: "player://tracks",
   queueChanged: "queue://changed",
+  workspaceChanged: "workspace://changed",
   playerFileLoaded: "player://file-loaded",
   playerEnded: "player://ended",
   playerError: "player://error",

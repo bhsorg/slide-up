@@ -262,12 +262,13 @@ impl Repository {
 
     // --- Playlists ---------------------------------------------------------
 
-    pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>> {
-        let mut stmt = conn.prepare(
-            "SELECT p.id, p.name, p.created_at, p.updated_at, p.cover_path, \
+    pub fn list_playlists(conn: &Connection, include_locked: bool) -> Result<Vec<Playlist>> {
+        let filter = if include_locked { "" } else { "WHERE p.locked = 0 " };
+        let mut stmt = conn.prepare(&format!(
+            "SELECT p.id, p.name, p.created_at, p.updated_at, p.cover_path, p.locked, \
              (SELECT COUNT(*) FROM playlist_tracks t WHERE t.playlist_id = p.id) \
-             FROM playlists p ORDER BY p.updated_at DESC",
-        )?;
+             FROM playlists p {filter}ORDER BY p.updated_at DESC"
+        ))?;
         let rows = stmt.query_map([], |row| {
             Ok(Playlist {
                 id: row.get(0)?,
@@ -275,10 +276,32 @@ impl Repository {
                 created_at: row.get(2)?,
                 updated_at: row.get(3)?,
                 cover_path: row.get(4)?,
-                track_count: row.get(5)?,
+                locked: row.get::<_, i64>(5)? != 0,
+                track_count: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn set_playlist_locked(conn: &Connection, id: i64, locked: bool) -> Result<()> {
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE playlists SET locked = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, locked as i64, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn is_playlist_locked(conn: &Connection, id: i64) -> Result<bool> {
+        Ok(conn
+            .query_row(
+                "SELECT locked FROM playlists WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0)
+            != 0)
     }
 
     pub fn create_playlist(conn: &Connection, name: &str) -> Result<i64> {

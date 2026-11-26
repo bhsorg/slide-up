@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { emit as emitAppEvent } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { X } from "@lucide/vue";
-import { events, api } from "../services/tauri";
+import { Droplets, X } from "@lucide/vue";
+import { events, api, onEvent } from "../services/tauri";
 import { usePlayerStore } from "../stores/player";
 
 const VIDEO_INSET = 0;
@@ -14,7 +14,19 @@ const player = usePlayerStore();
 const viewport = ref<HTMLElement | null>(null);
 const ready = ref(false);
 const errorMessage = ref("");
+const blurEnabled = ref(false);
+const hovered = ref(false);
+const blurred = computed(() => blurEnabled.value && !hovered.value);
 let observer: ResizeObserver | null = null;
+let unlistenVisibility: (() => void) | null = null;
+
+// The native mpv surface is blurred through a runtime filter so the picture
+// itself fades out of focus, not just the transparent webview overlay.
+watch(blurred, (value) => {
+  void api.setWidgetVideoBlur(value).catch((error: unknown) => {
+    errorMessage.value = String(error);
+  });
+});
 
 function syncVideoRect() {
   const element = viewport.value;
@@ -37,6 +49,15 @@ function syncVideoRect() {
 onMounted(async () => {
   document.getElementById("boot-splash")?.remove();
   void getCurrentWebview().setBackgroundColor([0, 0, 0, 0]).catch(() => {});
+  void onEvent<boolean>(events.videoWidgetVisibilityChanged, (visible) => {
+    if (!visible) blurEnabled.value = false;
+  })
+    .then((unlisten) => {
+      unlistenVisibility = unlisten;
+    })
+    .catch((error: unknown) => {
+      errorMessage.value = String(error);
+    });
   try {
     await player.initialize();
     ready.value = true;
@@ -53,14 +74,20 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  unlistenVisibility?.();
+  unlistenVisibility = null;
   observer?.disconnect();
   observer = null;
+  blurEnabled.value = false;
+  void api.setWidgetVideoBlur(false).catch(() => {});
   void api.setWidgetVideo(false).catch(() => {});
   player.dispose();
 });
 
 async function closeWidget() {
   try {
+    blurEnabled.value = false;
+    await api.setWidgetVideoBlur(false);
     await api.setWidgetVideo(false);
     await emitAppEvent(events.videoWidgetVisibilityChanged, false);
     await videoWindow.hide();
@@ -81,17 +108,36 @@ function onDragStart(event: MouseEvent) {
 </script>
 
 <template>
-  <div class="video-widget" :class="{ 'is-ready': ready }" @mousedown="onDragStart">
+  <div
+    class="video-widget"
+    :class="{ 'is-ready': ready, 'is-blurred': blurred }"
+    @mousedown="onDragStart"
+    @mouseenter="hovered = true"
+    @mouseleave="hovered = false"
+  >
     <div ref="viewport" class="video-viewport">
-      <button
-        class="close-button"
-        type="button"
-        title="Close video window"
-        aria-label="Close video window"
-        @click.stop="closeWidget"
-      >
-        <X :size="16" />
-      </button>
+      <div class="widget-actions">
+        <button
+          class="widget-action"
+          :class="{ active: blurEnabled }"
+          type="button"
+          :title="blurEnabled ? 'Turn off blur when not hovered' : 'Blur video when not hovered'"
+          :aria-label="blurEnabled ? 'Turn off blur when not hovered' : 'Blur video when not hovered'"
+          :aria-pressed="blurEnabled"
+          @click.stop="blurEnabled = !blurEnabled"
+        >
+          <Droplets :size="16" />
+        </button>
+        <button
+          class="widget-action close-button"
+          type="button"
+          title="Close video window"
+          aria-label="Close video window"
+          @click.stop="closeWidget"
+        >
+          <X :size="16" />
+        </button>
+      </div>
       <p v-if="errorMessage || player.state.error" class="widget-error" role="alert">
         {{ errorMessage || player.state.error }}
       </p>
@@ -129,6 +175,10 @@ function onDragStart(event: MouseEvent) {
   opacity: 1;
 }
 
+.video-widget.is-blurred {
+  filter: blur(4px);
+}
+
 .video-viewport {
   position: absolute;
   inset: 0;
@@ -137,11 +187,16 @@ function onDragStart(event: MouseEvent) {
   background: transparent;
 }
 
-.close-button {
+.widget-actions {
   position: absolute;
   z-index: 1;
   top: 12px;
   right: 12px;
+  display: flex;
+  gap: 6px;
+}
+
+.widget-action {
   display: grid;
   width: 28px;
   height: 28px;
@@ -154,10 +209,16 @@ function onDragStart(event: MouseEvent) {
   visibility: hidden;
   opacity: 0;
   pointer-events: none;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.video-widget:hover .close-button,
-.close-button:focus-visible {
+.widget-action.active {
+  color: #fff;
+  background: var(--accent-purple, #8b5cf6);
+}
+
+.video-widget:hover .widget-action,
+.widget-action:focus-visible {
   visibility: visible;
   opacity: 1;
   pointer-events: auto;

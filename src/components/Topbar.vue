@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "../services/tauri";
 import AppLogo from "./AppLogo.vue";
-import { Search, Sun, Moon, Minus, Square, X, X as ClearIcon, Settings, RefreshCw, Info, Mic, MicOff, DownloadCloud, Sparkles } from "@lucide/vue";
+import WorkspaceSwitcher from "./WorkspaceSwitcher.vue";
+import { Search, Minus, Square, X, X as ClearIcon, Settings, RefreshCw, Info, Mic, MicOff, DownloadCloud, Sparkles } from "@lucide/vue";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
 import { useSettingsStore } from "../stores/settings";
@@ -16,8 +17,6 @@ const library = useLibraryStore();
 const player = usePlayerStore();
 const settings = useSettingsStore();
 const toast = useToast();
-
-const isLight = computed(() => settings.theme === "light");
 
 const menuOpen = ref(false);
 const menuRef = ref<HTMLElement | null>(null);
@@ -44,6 +43,11 @@ function openSettings(tab: string = "appearance") {
   menuOpen.value = false;
   settings.activeTab = tab;
   emit("navigate", "settings");
+}
+
+function openWorkspaces() {
+  menuOpen.value = false;
+  emit("navigate", "workspaces");
 }
 
 function openAbout() {
@@ -361,29 +365,9 @@ placeholder="Search media, artists, albums, or lyrics..."
 
     <!-- Right: Theme switcher & Window Controls -->
     <div class="ml-auto flex shrink-0 items-center gap-2 z-10">
-      <!-- Theme switcher -->
-      <div class="flex items-center rounded-full border border-line bg-panel p-0.5">
-        <button
-          type="button"
-          class="flex h-6.5 w-6.5 items-center justify-center rounded-full transition-colors"
-          :class="isLight ? 'bg-amber-400 text-black' : 'text-amber-400/70 hover:text-amber-400'"
-          title="Light theme"
-          @click="settings.setTheme('light')"
-        >
-          <Sun :size="13" />
-        </button>
-        <button
-          type="button"
-          class="flex h-6.5 w-6.5 items-center justify-center rounded-full transition-colors"
-          :class="!isLight ? 'bg-purple text-white' : 'text-faint hover:text-ink'"
-          title="Dark theme"
-          @click="settings.setTheme('dark')"
-        >
-          <Moon :size="13" />
-        </button>
-      </div>
+      <WorkspaceSwitcher @settings="openWorkspaces" />
 
-      <!-- Settings Dropdown Menu (Right of Theme Switcher) -->
+      <!-- Settings Dropdown Menu -->
       <div ref="menuRef" class="relative">
         <button
           type="button"

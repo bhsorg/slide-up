@@ -14,6 +14,9 @@ pub const STORYBOARD_FRAMES: usize = 12;
 /// used by the seek-preview tooltip, so no resizing is needed at display time.
 pub const THUMBNAIL_WIDTH: i32 = 160;
 pub const THUMBNAIL_HEIGHT: i32 = 90;
+/// JPEG keeps the encrypted `.hlv` cache small; PNG frames were ~20KB each.
+const IMAGE_FORMAT: &str = "jpg";
+const JPEG_QUALITY: &str = "78";
 
 /// Called with the number of captured frames and the total frame count while
 /// a storyboard is being generated. Must be thread-safe because probing runs
@@ -26,7 +29,6 @@ pub struct VideoMetadata {
     pub width: i64,
     pub height: i64,
     pub codec: Option<String>,
-    pub thumbnail_path: Option<String>,
 }
 
 struct Probe {
@@ -109,11 +111,23 @@ impl Drop for Probe {
     }
 }
 
-/// Reads video information and captures a representative frame using libmpv.
+/// Temporary staging area for freshly decoded storyboard frames. It lives in
+/// the OS temp directory, never under the app data directory, because these
+/// PNGs are plaintext until `persist_storyboard` encrypts them into `.hlv`.
+pub fn storyboard_staging_dir(media_id: i64) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "slideup-storyboard-{}-{}",
+        std::process::id(),
+        media_id
+    ))
+}
+
+/// Reads video information using libmpv. When `generate_storyboard` is true,
+/// also captures the cached seek-preview frames. No video cover image is
+/// generated or stored — the UI falls back to a placeholder instead.
 pub fn probe(
     path: &Path,
     media_id: i64,
-    data_dir: &Path,
     generate_storyboard: bool,
     progress: Option<Arc<StoryboardProgress>>,
 ) -> Result<VideoMetadata> {
@@ -127,13 +141,9 @@ pub fn probe(
     ));
     std::fs::create_dir_all(&temp_dir)?;
 
-    // Frames are staged under a temporary id and renamed by the library scan
-    // once the real database id is known. If media_id is provided (> 0), write directly.
-    let story_dir = if media_id > 0 {
-        data_dir.join("storyboards").join(media_id.to_string())
-    } else {
-        data_dir.join("thumbnails").join("0_storyboard")
-    };
+    // Frames are staged in the OS temp directory and encrypted into the
+    // workspace cache by the caller once the real database id is known.
+    let story_dir = storyboard_staging_dir(media_id);
     if generate_storyboard {
         let _ = std::fs::remove_dir_all(&story_dir);
         let _ = std::fs::create_dir_all(&story_dir);
@@ -141,8 +151,8 @@ pub fn probe(
 
     let probe = Probe::new()?;
     probe.set("vo", "image")?;
-    // Scale frames while probing so both the cover thumbnail and the cached
-    // storyboard are 160x90. The lavfi graph keeps the source aspect ratio and
+    // Scale frames while probing so cached storyboard frames are 160x90.
+    // The lavfi graph keeps the source aspect ratio and
     // pads with black bars; fall back to mpv's builtin scaler if unavailable.
     let graph = format!(
         "lavfi=[scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2:black]",
@@ -154,7 +164,8 @@ pub fn probe(
             &format!("scale={}:{}", THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT),
         );
     }
-    probe.set("vo-image-format", "png")?;
+    probe.set("vo-image-format", IMAGE_FORMAT)?;
+    probe.set("vo-image-jpeg-quality", JPEG_QUALITY)?;
     probe.set("vo-image-outdir", &temp_dir.to_string_lossy())?;
     probe.set("frames", "1")?;
     probe.set("start", "5")?;
@@ -199,7 +210,6 @@ pub fn probe(
                     width,
                     height: probe.get_i64("video-params/h"),
                     codec: probe.get_string("video-codec"),
-                    thumbnail_path: None,
                 };
             }
         }
@@ -212,18 +222,15 @@ pub fn probe(
         std::thread::sleep(Duration::from_millis(120));
     }
 
-    let thumbnail = find_png(&temp_dir).and_then(|source| {
+    // The one decoded frame is only used as storyboard frame 0. It is never
+    // copied into the `thumbnails` cache, which is reserved for audio artwork.
+    if let Some(source) = find_image(&temp_dir) {
         if generate_storyboard {
-            let _ = std::fs::copy(&source, story_dir.join("0.png"));
+            let _ = std::fs::copy(&source, story_dir.join("0.jpg"));
         }
-        let thumbs = data_dir.join("thumbnails");
-        std::fs::create_dir_all(&thumbs).ok()?;
-        let target = thumbs.join(format!("{media_id}.png"));
-        std::fs::copy(&source, &target).ok()?;
         // Free the name so following captures can reuse the same image VO.
         let _ = std::fs::remove_file(&source);
-        Some(target.to_string_lossy().into_owned())
-    });
+    }
 
     if generate_storyboard && metadata.duration_ms > 0 {
         if let Some(report) = &progress {
@@ -240,15 +247,11 @@ pub fn probe(
     }
     let _ = std::fs::remove_dir_all(&temp_dir);
 
-    Ok(VideoMetadata {
-        thumbnail_path: thumbnail,
-        ..metadata
-    })
+    Ok(metadata)
 }
 
-/// Captures the remaining seek-preview frames with the same lightweight image
-/// VO used for the cover thumbnail. This runs only during library import and
-/// never touches the playing mpv instance.
+/// Captures the remaining seek-preview frames with the lightweight image VO.
+/// This runs only during library import and never touches the playing instance.
 fn capture_storyboard(
     probe: &Probe,
     path: &Path,
@@ -295,10 +298,10 @@ fn capture_storyboard(
         // Give the image VO a moment to flush the PNG.
         std::thread::sleep(Duration::from_millis(100));
 
-        let Some(source) = find_png(temp_dir) else {
+        let Some(source) = find_image(temp_dir) else {
             break;
         };
-        let target = story_dir.join(format!("{index}.png"));
+        let target = story_dir.join(format!("{index}.jpg"));
         if std::fs::rename(&source, &target).is_err() {
             break;
         }
@@ -308,7 +311,70 @@ fn capture_storyboard(
     }
 }
 
-fn find_png(dir: &Path) -> Option<PathBuf> {
+/// Decode one small frame for a workspace-protected video cover. The seek
+/// point is 10% of the duration (clamped to 1–30s) so short clips and long
+/// videos do not produce black intro frames.
+pub fn capture_cover(path: &Path, duration_ms: i64, temp_dir: &Path) -> Result<Vec<u8>> {
+    let seconds = if duration_ms > 0 {
+        ((duration_ms as f64 / 1000.0) * 0.1).clamp(1.0, 30.0)
+    } else {
+        5.0
+    };
+
+    let probe = Probe::new()?;
+    probe.set("vo", "image")?;
+    let graph = format!(
+        "lavfi=[scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2:black]",
+        THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT
+    );
+    if probe.set("vf", &graph).is_err() {
+        let _ = probe.set("vf", &format!("scale={}:{}", THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT));
+    }
+    probe.set("vo-image-format", IMAGE_FORMAT)?;
+    probe.set("vo-image-jpeg-quality", JPEG_QUALITY)?;
+    probe.set("vo-image-outdir", &temp_dir.to_string_lossy())?;
+    probe.set("frames", "1")?;
+    probe.set("start", &format!("{seconds:.3}"))?;
+    probe.set("audio", "no")?;
+    probe.set("sub", "no")?;
+    probe.set("hwdec", "no")?;
+    probe.set("terminal", "no")?;
+    probe.set("msg-level", "all=error")?;
+    probe.set("osd-level", "0")?;
+
+    let load = CString::new("loadfile").unwrap();
+    let file = CString::new(path.to_string_lossy().into_owned())
+        .map_err(|_| AppError::media("The media path contains an invalid character."))?;
+    let replace = CString::new("replace").unwrap();
+    let pointers: [*const c_char; 4] = [
+        load.as_ptr(),
+        file.as_ptr(),
+        replace.as_ptr(),
+        std::ptr::null(),
+    ];
+    let code = unsafe { (probe.ffi.command)(probe.handle, pointers.as_ptr()) };
+    probe.ffi.check(code)?;
+
+    let started = Instant::now();
+    let mut ended = false;
+    while started.elapsed().as_secs() < 20 {
+        let event = unsafe { (probe.ffi.wait_event)(probe.handle, 0.05) };
+        if !event.is_null() && unsafe { (*event).event_id } == MPV_EVENT_END_FILE {
+            ended = true;
+            break;
+        }
+    }
+    if ended {
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    let source = find_image(temp_dir)
+        .ok_or_else(|| AppError::media("Could not capture a frame from this video."))?;
+    let bytes = std::fs::read(&source)?;
+    let _ = std::fs::remove_file(&source);
+    Ok(bytes)
+}
+
+fn find_image(dir: &Path) -> Option<PathBuf> {
     std::fs::read_dir(dir)
         .ok()?
         .filter_map(|entry| entry.ok())
@@ -316,6 +382,10 @@ fn find_png(dir: &Path) -> Option<PathBuf> {
         .find(|path| {
             path.extension()
                 .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+                .is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("png")
+                        || ext.eq_ignore_ascii_case("jpg")
+                        || ext.eq_ignore_ascii_case("jpeg")
+                })
         })
 }

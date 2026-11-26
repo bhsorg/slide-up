@@ -63,7 +63,7 @@ const current = computed(() => player.state.current);
 const playing = computed(() => player.state.status === "playing");
 const hasTrack = computed(() => !!current.value);
 const isVideo = computed(() => current.value?.kind === "video");
-const artwork = computed(() => library.thumbnailUrl(current.value?.thumbnailPath ?? null));
+const artwork = computed(() => library.coverUrl(current.value));
 const subtitle = computed(() => {
   const item = current.value;
   if (!item) return "Nothing playing";

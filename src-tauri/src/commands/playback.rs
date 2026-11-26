@@ -32,7 +32,7 @@ pub fn play_queue(
 
 #[tauri::command]
 pub fn play_by_path(state: State<'_, AppState>, path: String) -> Result<()> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.unlocked_db()?;
     let media = Repository::get_media_by_path(&conn, &path)?
         .ok_or_else(|| crate::error::AppError::media("This file is not in the library yet."))?;
     drop(conn);
@@ -367,6 +367,14 @@ pub async fn set_widget_video(
         .await
         .map_err(|error| crate::error::AppError::native(error.to_string()))??;
     Ok(())
+}
+
+/// Blur the borrowed native video surface while the detached video window is
+/// not hovered. The webview overlay is blurred with CSS in `VideoWidget.vue`.
+#[tauri::command]
+pub fn set_widget_video_blur(state: State<'_, AppState>, enabled: bool) -> Result<()> {
+    let filter = if enabled { "lavfi=[gblur=sigma=8]" } else { "" };
+    state.mpv.set_string_property("vf", filter)
 }
 
 /// Position the video window's borrowed surface in physical pixels.

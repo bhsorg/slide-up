@@ -73,6 +73,7 @@ pub struct Playlist {
     pub updated_at: i64,
     pub track_count: i64,
     pub cover_path: Option<String>,
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,6 +241,10 @@ pub struct AppSettings {
     pub scan_audio: bool,
     pub scan_video: bool,
     pub generate_thumbnails: bool,
+    /// Generate cached seek-preview frames for newly imported videos. Off by
+    /// default; users can still generate a storyboard from a video's menu.
+    #[serde(default)]
+    pub auto_generate_storyboard: bool,
     pub remove_missing_on_scan: bool,
     pub auto_scan_on_startup: bool,
     pub start_minimized: bool,
@@ -362,6 +367,7 @@ impl Default for AppSettings {
             scan_audio: true,
             scan_video: true,
             generate_thumbnails: true,
+            auto_generate_storyboard: false,
             remove_missing_on_scan: false,
             auto_scan_on_startup: false,
             start_minimized: false,

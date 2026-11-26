@@ -41,7 +41,7 @@ fn legacy_cache_path(state: &AppState, media_id: i64) -> std::path::PathBuf {
 /// and automatically migrates it to the database.
 #[tauri::command]
 pub fn get_lyrics(state: State<'_, AppState>, media_id: i64) -> Result<Option<CachedLyrics>> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.unlocked_db()?;
     if let Some(json_str) = Repository::get_lyrics(&conn, media_id)? {
         let cached = serde_json::from_str::<CachedLyrics>(&json_str)?;
         return Ok(Some(cached));
@@ -90,7 +90,7 @@ pub fn save_lyrics(
     };
     let json_data = serde_json::to_string(&envelope)?;
 
-    let conn = state.db.lock().unwrap();
+    let conn = state.unlocked_db()?;
     if let Some(res) = result {
         let plain = res
             .lines
@@ -127,6 +127,6 @@ pub fn save_lyrics(
 /// Search media IDs whose lyrics contain the query phrase (for voice/mic or text lyrics search).
 #[tauri::command]
 pub fn search_lyrics(state: State<'_, AppState>, query: String) -> Result<Vec<i64>> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.unlocked_db()?;
     Repository::search_media_by_lyrics(&conn, &query)
 }

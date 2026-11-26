@@ -5,7 +5,6 @@ import {
   Captions, Shuffle, Repeat, Repeat1,
   PictureInPicture2, Check, Settings, ChevronDown, ChevronLeft, ChevronRight, FolderOpen, StepForward, Camera, X, Sparkles, WandSparkles, Tv, Film, ListMusic,
 } from "@lucide/vue";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "../services/tauri";
 import { usePlayerStore } from "../stores/player";
@@ -199,16 +198,10 @@ function handleGlobalClick(e: MouseEvent) {
 const current = computed(() => player.state.current);
 
 const videoThumbnailUrl = computed(() => {
-  if (current.value?.thumbnailPath) {
-    return library.thumbnailUrl(current.value.thumbnailPath);
-  }
-  if (current.value?.id) {
-    const item = library.byId(current.value.id);
-    if (item?.thumbnailPath) {
-      return library.thumbnailUrl(item.thumbnailPath);
-    }
-  }
-  return null;
+  const item = current.value
+    ? library.byId(current.value.id) ?? current.value
+    : null;
+  return library.coverUrl(item);
 });
 
 const videoFormat = computed(() => {
@@ -470,13 +463,13 @@ async function ensureStoryboard(force = false) {
   if (!id || (!force && storyboardLoadedFor === id)) return;
   storyboardLoadedFor = id;
   storyboardUrls.value = [];
-  const paths = await Promise.all(
+  const urls = await Promise.all(
     Array.from({ length: STORYBOARD_FRAMES }, (_, index) =>
       api.getStoryboardFrame(id, index).catch(() => null),
     ),
   );
   if (storyboardLoadedFor !== id) return;
-  storyboardUrls.value = paths.map((path) => (path ? convertFileSrc(path) : undefined));
+  storyboardUrls.value = urls.map((url) => url ?? undefined);
 }
 
 function onStoryboardChanged() {

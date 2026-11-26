@@ -38,7 +38,8 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             name        TEXT NOT NULL,
             created_at  INTEGER NOT NULL,
             updated_at  INTEGER NOT NULL,
-            cover_path  TEXT
+            cover_path  TEXT,
+            locked      INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS playlist_tracks (
@@ -71,5 +72,64 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_lyrics_plain_text ON lyrics(plain_text COLLATE NOCASE);
         "#,
-    )
+    )?;
+
+    // Older workspace databases created before playlist privacy need the new
+    // column. Check first so repeated migrations stay cheap and idempotent.
+    let has_locked = conn
+        .prepare("PRAGMA table_info(playlists)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|name| name.map(|name| name == "locked").unwrap_or(false));
+    if !has_locked {
+        conn.execute("ALTER TABLE playlists ADD COLUMN locked INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has_locked_column(conn: &Connection) -> bool {
+        conn.prepare("PRAGMA table_info(playlists)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .any(|name| name.map(|name| name == "locked").unwrap_or(false))
+    }
+
+    #[test]
+    fn migration_adds_playlist_locked_column_idempotently() {
+        let conn = Connection::open_in_memory().unwrap();
+        // A database created before playlist privacy existed.
+        conn.execute_batch(
+            "CREATE TABLE playlists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cover_path TEXT
+             );",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        assert!(has_locked_column(&conn));
+
+        conn.execute(
+            "INSERT INTO playlists (name, created_at, updated_at) VALUES ('Legacy', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let locked: i64 = conn
+            .query_row("SELECT locked FROM playlists WHERE name = 'Legacy'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(locked, 0);
+
+        // Running the migration again must not fail or duplicate the column.
+        migrate(&conn).unwrap();
+        assert!(has_locked_column(&conn));
+    }
 }

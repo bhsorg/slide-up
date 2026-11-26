@@ -73,9 +73,17 @@ export const usePlayerStore = defineStore("player", () => {
     queueName.value = payload.name;
   }
 
-  async function initialize() {
-    if (initialized.value) return;
-    initialized.value = true;
+  /** Drop every piece of player data belonging to the previous workspace. */
+  function clearLocal() {
+    state.value = emptyState();
+    queue.value = [];
+    currentIndex.value = null;
+    queueName.value = "";
+    state.value.error = null;
+  }
+
+  /** Re-fetch player data from the current workspace without adding listeners. */
+  async function reload() {
     try {
       const [snapshot, queueState, tracks] = await Promise.all([
         api.getSnapshot(),
@@ -88,6 +96,12 @@ export const usePlayerStore = defineStore("player", () => {
     } catch (error) {
       state.value.error = error instanceof Error ? error.message : String(error);
     }
+  }
+
+  async function initialize() {
+    if (initialized.value) return;
+    initialized.value = true;
+    await reload();
 
     unlisteners.push(
       await onEvent<PlayerState>(events.playerState, (payload) => applyState(payload)),
@@ -261,8 +275,13 @@ export const usePlayerStore = defineStore("player", () => {
 
   async function openSubtitle() {
     const { open } = await import("@tauri-apps/plugin-dialog");
-    const path = await open({ multiple: false, filters: [{ name: "Subtitles", extensions: ["srt", "ass", "ssa", "vtt"] }] });
-    if (typeof path === "string") await api.addSubtitle(path);
+    await api.beginNativeDialog();
+    try {
+      const path = await open({ multiple: false, filters: [{ name: "Subtitles", extensions: ["srt", "ass", "ssa", "vtt"] }] });
+      if (typeof path === "string") await api.addSubtitle(path);
+    } finally {
+      await api.endNativeDialog();
+    }
   }
 
   function reloadStoryboard(_mediaId?: number) {
@@ -366,6 +385,8 @@ export const usePlayerStore = defineStore("player", () => {
     isLive,
     progress,
     initialize,
+    clearLocal,
+    reload,
     dispose,
     refreshState,
     refreshQueue,

@@ -65,8 +65,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
         <div class="flex items-start gap-3 border-b border-line px-5 py-4">
           <div class="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-panel text-muted">
             <img
-              v-if="item.thumbnailPath"
-              :src="library.thumbnailUrl(item.thumbnailPath)"
+              v-if="library.coverUrl(item)"
+              :src="library.coverUrl(item)"
               :alt="item.title"
               class="h-full w-full object-cover"
             />

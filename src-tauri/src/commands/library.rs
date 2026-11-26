@@ -4,9 +4,14 @@ use crate::error::{AppError, Result};
 use crate::events;
 use crate::metadata::{self, AudioMetadata};
 use crate::models::{MediaFilter, MediaItem, MediaKind, ScanResult};
-use crate::state::AppState;
+use crate::protected_cache;
+use crate::state::{AppState, CacheIdentity};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, OnceLock};
+use tokio::sync::mpsc;
+use tokio::sync::Semaphore;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 use walkdir::WalkDir;
@@ -14,14 +19,24 @@ use walkdir::WalkDir;
 const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "wav", "flac", "aac", "ogg", "oga", "m4a", "wma", "aiff", "aif", "opus", "mp2",
 ];
+// Cover generation runs libmpv decoders. Cap concurrent decodes so a grid of
+// videos cannot spawn an unbounded number of native decoder threads.
+static COVER_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
+static COVER_SEQ: AtomicU64 = AtomicU64::new(0);
+
 const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mkv", "avi", "mov", "webm", "m4v", "wmv", "flv", "ts", "m2ts", "mpg", "mpeg", "3gp",
 ];
 
-/// Move the temporary seek-preview frames staged by the metadata probe into
-/// the final per-media directory. Disabled settings simply discard them.
-fn persist_storyboard(data_dir: &Path, media_id: i64, enabled: bool) {
-    let temp = data_dir.join("thumbnails").join("0_storyboard");
+/// Encrypt the seek-preview frames staged by the metadata probe into the
+/// active workspace's private cache. Disabled settings simply discard them.
+fn persist_storyboard(
+    data_dir: &Path,
+    identity: &CacheIdentity,
+    media_id: i64,
+    enabled: bool,
+) {
+    let temp = metadata::video::storyboard_staging_dir(media_id);
     if !enabled {
         let _ = std::fs::remove_dir_all(&temp);
         return;
@@ -29,58 +44,85 @@ fn persist_storyboard(data_dir: &Path, media_id: i64, enabled: bool) {
     if !temp.exists() {
         return;
     }
-    let root = data_dir.join("storyboards");
+    let root = protected_cache::workspace_dir(data_dir, &identity.workspace_id).join("storyboards");
     let target = root.join(media_id.to_string());
     let _ = std::fs::create_dir_all(&root);
     let _ = std::fs::remove_dir_all(&target);
-    let _ = std::fs::rename(&temp, &target);
+    for index in 0..metadata::video::STORYBOARD_FRAMES {
+        let staged = temp.join(format!("{index}.jpg"));
+        let Ok(bytes) = std::fs::read(&staged) else { continue };
+        let _ = protected_cache::write_file(
+            &target.join(format!("{index}.hlv")),
+            identity,
+            "storyboard",
+            media_id,
+            index,
+            &bytes,
+        );
+    }
+    let _ = std::fs::remove_dir_all(&temp);
 }
 
-/// Spawns a background worker to generate storyboard seek-previews for newly imported videos
-/// without blocking the UI or library list.
+type StoryboardJob = (AppHandle, PathBuf, CacheIdentity, i64, PathBuf);
+
+static STORYBOARD_SENDER: OnceLock<mpsc::UnboundedSender<StoryboardJob>> = OnceLock::new();
+
+/// One persistent worker serializes storyboard decodes. Starting a fresh OS
+/// thread per scan let several library scans run many mpv instances at once.
+fn storyboard_sender() -> &'static mpsc::UnboundedSender<StoryboardJob> {
+    STORYBOARD_SENDER.get_or_init(|| {
+        let (sender, mut receiver) = mpsc::unbounded_channel::<StoryboardJob>();
+        tauri::async_runtime::spawn(async move {
+            while let Some(job) = receiver.recv().await {
+                // Each decode blocks for seconds; keep it off the async runtime
+                // and process jobs one at a time.
+                let _ = tauri::async_runtime::spawn_blocking(move || run_storyboard_job(job)).await;
+            }
+        });
+        sender
+    })
+}
+
+fn run_storyboard_job((app, data_dir, identity, media_id, path): StoryboardJob) {
+    let progress_app = app.clone();
+    let progress = std::sync::Arc::new(move |done: usize, total: usize| {
+        let _ = progress_app.emit(
+            events::STORYBOARD_PROGRESS,
+            serde_json::json!({
+                "mediaId": media_id,
+                "done": done,
+                "total": total,
+                "status": "running",
+            }),
+        );
+    });
+
+    let res = metadata::video::probe(&path, media_id, true, Some(progress));
+    persist_storyboard(&data_dir, &identity, media_id, true);
+
+    let _ = app.emit(
+        events::STORYBOARD_PROGRESS,
+        serde_json::json!({
+            "mediaId": media_id,
+            "done": metadata::video::STORYBOARD_FRAMES,
+            "total": metadata::video::STORYBOARD_FRAMES,
+            "status": if res.is_ok() { "done" } else { "error" },
+        }),
+    );
+}
+
+/// Queues storyboard seek-previews for newly imported videos without blocking
+/// the UI or spawning a new decode thread per scan.
 fn spawn_storyboard_worker(
     app: AppHandle,
     data_dir: PathBuf,
+    identity: CacheIdentity,
     queue: Vec<(i64, PathBuf)>,
 ) {
-    if queue.is_empty() {
-        return;
+    let sender = storyboard_sender();
+    for (media_id, path) in queue {
+        let _ = sender.send((app.clone(), data_dir.clone(), identity.clone(), media_id, path));
     }
-    std::thread::spawn(move || {
-        for (media_id, path) in queue {
-            let progress_app = app.clone();
-            let progress = std::sync::Arc::new(move |done: usize, total: usize| {
-                let _ = progress_app.emit(
-                    events::STORYBOARD_PROGRESS,
-                    serde_json::json!({
-                        "mediaId": media_id,
-                        "done": done,
-                        "total": total,
-                        "status": "running",
-                    }),
-                );
-            });
-
-            let res = metadata::video::probe(
-                &path,
-                media_id,
-                &data_dir,
-                true,
-                Some(progress),
-            );
-            persist_storyboard(&data_dir, media_id, true);
-
-            let _ = app.emit(
-                events::STORYBOARD_PROGRESS,
-                serde_json::json!({
-                    "mediaId": media_id,
-                    "done": metadata::video::STORYBOARD_FRAMES,
-                    "total": metadata::video::STORYBOARD_FRAMES,
-                    "status": if res.is_ok() { "done" } else { "error" },
-                }),
-            );
-        }
-    });
 }
 
 fn classify(path: &Path) -> Option<MediaKind> {
@@ -113,12 +155,16 @@ fn title_from_path(path: &Path) -> String {
 
 #[tauri::command]
 pub async fn pick_files(app: AppHandle) -> Result<Vec<String>> {
-    let files = app
-        .dialog()
-        .file()
-        .add_filter("Media files", &["mp3", "wav", "flac", "aac", "ogg", "m4a", "mp4", "mkv", "avi", "mov", "webm"])
-        .set_title("Open media files")
-        .blocking_pick_files();
+    let files = {
+        // Drop always-on-top while the native dialog is open; otherwise it
+        // renders behind the player (PiP / detached widgets).
+        let _topmost = crate::dialog_helper::TopmostGuard::suspend(&app);
+        app.dialog()
+            .file()
+            .add_filter("Media files", &["mp3", "wav", "flac", "aac", "ogg", "m4a", "mp4", "mkv", "avi", "mov", "webm"])
+            .set_title("Open media files")
+            .blocking_pick_files()
+    };
     Ok(files
         .into_iter()
         .flatten()
@@ -129,11 +175,13 @@ pub async fn pick_files(app: AppHandle) -> Result<Vec<String>> {
 
 #[tauri::command]
 pub async fn pick_folder(app: AppHandle) -> Result<Option<String>> {
-    let folder = app
-        .dialog()
-        .file()
-        .set_title("Select a media folder")
-        .blocking_pick_folder();
+    let folder = {
+        let _topmost = crate::dialog_helper::TopmostGuard::suspend(&app);
+        app.dialog()
+            .file()
+            .set_title("Select a media folder")
+            .blocking_pick_folder()
+    };
     Ok(folder
         .and_then(|path| path.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned()))
@@ -141,20 +189,20 @@ pub async fn pick_folder(app: AppHandle) -> Result<Option<String>> {
 
 #[tauri::command]
 pub fn list_media(state: tauri::State<'_, AppState>, filter: MediaFilter) -> Result<Vec<MediaItem>> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.unlocked_db()?;
     Repository::list_media(&conn, &filter)
 }
 
 #[tauri::command]
 pub fn get_recent(state: tauri::State<'_, AppState>, limit: Option<i64>) -> Result<Vec<MediaItem>> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.unlocked_db()?;
     Repository::get_recent(&conn, limit.unwrap_or(12))
 }
 
 #[tauri::command]
 pub fn clear_recent(state: tauri::State<'_, AppState>) -> Result<()> {
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db()?;
         Repository::clear_recent(&conn)?;
     }
     let _ = state.app.emit(events::LIBRARY_CHANGED, ());
@@ -164,7 +212,7 @@ pub fn clear_recent(state: tauri::State<'_, AppState>) -> Result<()> {
 #[tauri::command]
 pub fn remove_from_recent(state: tauri::State<'_, AppState>, ids: Vec<i64>) -> Result<()> {
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db()?;
         for id in ids {
             Repository::remove_from_recent(&conn, id)?;
         }
@@ -175,14 +223,14 @@ pub fn remove_from_recent(state: tauri::State<'_, AppState>, ids: Vec<i64>) -> R
 
 #[tauri::command]
 pub fn get_media(state: tauri::State<'_, AppState>, id: i64) -> Result<Option<MediaItem>> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.unlocked_db()?;
     Repository::get_media(&conn, id)
 }
 
 #[tauri::command]
 pub fn set_favorite(state: tauri::State<'_, AppState>, id: i64, favorite: bool) -> Result<()> {
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db()?;
         Repository::set_favorite(&conn, id, favorite)?;
     }
     let _ = state.app.emit(events::LIBRARY_CHANGED, ());
@@ -192,7 +240,7 @@ pub fn set_favorite(state: tauri::State<'_, AppState>, id: i64, favorite: bool) 
 #[tauri::command]
 pub fn delete_media(state: tauri::State<'_, AppState>, id: i64, delete_file: bool) -> Result<()> {
     let item = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db()?;
         let media = Repository::get_media(&conn, id)?;
         Repository::delete_media(&conn, id)?;
         media
@@ -219,7 +267,7 @@ pub fn clear_library(state: tauri::State<'_, AppState>, kind: String) -> Result<
         )
     })?;
     let removed = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db()?;
         let items = Repository::clear_media_by_kind(&conn, kind)?;
         for item in &items {
             crate::metadata::thumbnail::remove_thumbnail(
@@ -255,6 +303,7 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
             settings.scan_video,
             settings.generate_thumbnails,
             settings.remove_missing_on_scan,
+            settings.auto_generate_storyboard,
         )
     };
 
@@ -310,9 +359,9 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
                 )
             }
             MediaKind::Video => {
-                // Generate only metadata and the single cover thumbnail during scan (false for storyboard).
-                // Storyboard frames are generated in the background after the library updates.
-                let info = match metadata::video::probe(entry.path(), 0, &state.data_dir, false, None) {
+                // Metadata only during scan; storyboards are generated in the
+                // background after the library updates.
+                let info = match metadata::video::probe(entry.path(), 0, false, None) {
                     Ok(info) => info,
                     Err(_) => continue,
                 };
@@ -335,7 +384,7 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
         };
 
         {
-            let conn = state.db.lock().unwrap();
+            let conn = state.unlocked_db()?;
             match Repository::upsert_media(&conn, &new_media) {
                 Ok((id, changed)) => {
                     if changed {
@@ -343,27 +392,20 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
                     } else {
                         added += 1;
                     }
-                    let thumbnail = if kind == MediaKind::Video && new_media.duration_ms > 0 {
-                        // Thumbnails are captured with a temporary id; persist them now.
-                        let temp = state.data_dir.join("thumbnails").join("0.png");
-                        let target = state.data_dir.join("thumbnails").join(format!("{id}.png"));
-                        if !prefs.4 {
-                            let _ = std::fs::remove_file(&temp);
-                            None
-                        } else if temp.exists() && std::fs::rename(&temp, &target).is_ok() {
-                            Some(target.to_string_lossy().into_owned())
-                        } else {
-                            None
-                        }
-                    } else {
+                    // Only embedded audio artwork is cached in `thumbnails`.
+                    // Video items use the UI placeholder; their storyboards
+                    // (when enabled) live in `storyboards/<id>`.
+                    let thumbnail = if kind == MediaKind::Audio && prefs.4 {
                         cover.as_ref().and_then(|data| {
                             metadata::thumbnail::save_cover(&state.data_dir, id, data).ok()
                         })
+                    } else {
+                        None
                     };
                     if let Some(path) = thumbnail {
                         let _ = Repository::set_thumbnail(&conn, id, Some(&path));
                     }
-                    if kind == MediaKind::Video && prefs.4 && new_media.duration_ms > 0 {
+                    if kind == MediaKind::Video && prefs.6 && new_media.duration_ms > 0 {
                         storyboard_queue.push((id, entry.path().to_path_buf()));
                     }
                 }
@@ -379,7 +421,7 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
 
     let removed = if prefs.5 {
         let keep: HashSet<String> = paths.into_iter().collect();
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db()?;
         Repository::remove_missing(&conn, &keep.into_iter().collect::<Vec<_>>()).unwrap_or(0)
     } else {
         0
@@ -389,8 +431,13 @@ pub(crate) fn scan_folder_impl(state: &AppState, folder: &str) -> Result<ScanRes
     let _ = state.app.emit(events::LIBRARY_CHANGED, ());
 
     // Queue storyboard generation in the background so it never blocks the list.
-    if prefs.4 && !storyboard_queue.is_empty() {
-        spawn_storyboard_worker(state.app.clone(), state.data_dir.clone(), storyboard_queue);
+    if prefs.6 && !storyboard_queue.is_empty() {
+        spawn_storyboard_worker(
+            state.app.clone(),
+            state.data_dir.clone(),
+            state.cache_identity()?,
+            storyboard_queue,
+        );
     }
 
     Ok(ScanResult {
@@ -409,7 +456,12 @@ pub fn import_files(state: tauri::State<'_, AppState>, paths: Vec<String>) -> Re
 pub(crate) fn import_files_impl(state: &AppState, paths: Vec<String>) -> Result<ScanResult> {
     let prefs = {
         let settings = state.settings.lock().unwrap();
-        (settings.scan_audio, settings.scan_video, settings.generate_thumbnails)
+        (
+            settings.scan_audio,
+            settings.scan_video,
+            settings.generate_thumbnails,
+            settings.auto_generate_storyboard,
+        )
     };
     let mut added = 0usize;
     let mut updated = 0usize;
@@ -443,8 +495,8 @@ pub(crate) fn import_files_impl(state: &AppState, paths: Vec<String>) -> Result<
                 )
             }
             MediaKind::Video => {
-                // Generate only metadata and cover thumbnail on import (false for storyboard).
-                let info = metadata::video::probe(path, 0, &state.data_dir, false, None)?;
+                // Metadata only on import (false for storyboard).
+                let info = metadata::video::probe(path, 0, false, None)?;
                 (None, None, info.duration_ms, info.codec, Some(info.width), Some(info.height), None)
             }
         };
@@ -461,29 +513,20 @@ pub(crate) fn import_files_impl(state: &AppState, paths: Vec<String>) -> Result<
             size_bytes: size,
             fingerprint,
         };
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db()?;
         let (id, changed) = Repository::upsert_media(&conn, &new_media)?;
         if changed { updated += 1 } else { added += 1 }
-        let thumbnail = if kind == MediaKind::Video {
-            let temp = state.data_dir.join("thumbnails").join("0.png");
-            let target = state.data_dir.join("thumbnails").join(format!("{id}.png"));
-            if !prefs.2 {
-                let _ = std::fs::remove_file(&temp);
-                None
-            } else if temp.exists() && std::fs::rename(&temp, &target).is_ok() {
-                Some(target.to_string_lossy().into_owned())
-            } else {
-                None
-            }
-        } else {
+        let thumbnail = if kind == MediaKind::Audio && prefs.2 {
             cover.as_ref().and_then(|data| {
                 metadata::thumbnail::save_cover(&state.data_dir, id, data).ok()
             })
+        } else {
+            None
         };
         if let Some(path) = thumbnail {
             let _ = Repository::set_thumbnail(&conn, id, Some(&path));
         }
-        if kind == MediaKind::Video && prefs.2 && new_media.duration_ms > 0 {
+        if kind == MediaKind::Video && prefs.3 && new_media.duration_ms > 0 {
             storyboard_queue.push((id, path.to_path_buf()));
         }
     }
@@ -492,8 +535,13 @@ pub(crate) fn import_files_impl(state: &AppState, paths: Vec<String>) -> Result<
     let _ = state.app.emit(events::LIBRARY_CHANGED, ());
 
     // Generate storyboards asynchronously in background
-    if prefs.2 && !storyboard_queue.is_empty() {
-        spawn_storyboard_worker(state.app.clone(), state.data_dir.clone(), storyboard_queue);
+    if prefs.3 && !storyboard_queue.is_empty() {
+        spawn_storyboard_worker(
+            state.app.clone(),
+            state.data_dir.clone(),
+            state.cache_identity()?,
+            storyboard_queue,
+        );
     }
 
     Ok(ScanResult { found: paths.len(), added, updated, removed: 0 })
@@ -501,12 +549,67 @@ pub(crate) fn import_files_impl(state: &AppState, paths: Vec<String>) -> Result<
 
 #[tauri::command]
 pub fn get_thumbnail(state: tauri::State<'_, AppState>, path: String) -> Result<Option<String>> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.unlocked_db()?;
     Ok(Repository::get_media_by_path(&conn, &path)?
         .and_then(|media| media.thumbnail_path))
 }
 
-/// Returns a cached seek-preview frame path, or `None` when storyboard
+/// Return a video cover as a data URL, generating and encrypting it lazily on
+/// first request. Audio artwork is unchanged; only video covers live in the
+/// workspace's protected cache.
+#[tauri::command]
+pub async fn get_video_cover(
+    state: tauri::State<'_, AppState>,
+    media_id: i64,
+) -> Result<Option<String>> {
+    let identity = state.cache_identity()?;
+    let cached = protected_cache::workspace_dir(&state.data_dir, &identity.workspace_id)
+        .join("thumbnails")
+        .join(format!("{media_id}.hlv"));
+    if let Some(bytes) = protected_cache::read_file(&cached, &identity, "cover", media_id, 0)? {
+        return Ok(Some(protected_cache::data_url(&bytes)));
+    }
+
+    let (path, kind, duration_ms) = {
+        let conn = state.unlocked_db()?;
+        let media = Repository::get_media(&conn, media_id)?
+            .ok_or_else(|| AppError::media("This item is no longer in the library."))?;
+        (media.path, media.kind, media.duration_ms)
+    };
+    if kind != MediaKind::Video {
+        return Ok(None);
+    }
+
+    // Limit concurrent native decoders and re-check the cache: another request
+    // for the same video may have finished while this one waited for a slot.
+    let _permit = COVER_SEMAPHORE
+        .acquire()
+        .await
+        .map_err(|_| AppError::native("Cover generation is shutting down."))?;
+    if let Some(bytes) = protected_cache::read_file(&cached, &identity, "cover", media_id, 0)? {
+        return Ok(Some(protected_cache::data_url(&bytes)));
+    }
+
+    // Decoding a frame can take seconds; never run it on the main UI thread.
+    let result: Result<Option<String>> = tauri::async_runtime::spawn_blocking(move || {
+        let seq = COVER_SEQ.fetch_add(1, Ordering::Relaxed);
+        let temp = std::env::temp_dir().join(format!(
+            "slideup-cover-{media_id}-{}-{seq}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&temp);
+        let result = metadata::video::capture_cover(&PathBuf::from(path), duration_ms, &temp);
+        let _ = std::fs::remove_dir_all(&temp);
+        let bytes = result?;
+        protected_cache::write_file(&cached, &identity, "cover", media_id, 0, &bytes)?;
+        Ok(Some(protected_cache::data_url(&bytes)))
+    })
+    .await
+    .map_err(|err| AppError::native(format!("Could not generate the video cover: {err}")))?;
+    result
+}
+
+/// Returns a cached seek-preview frame as a data URL, or `None` when storyboard
 /// generation was disabled or failed for this video.
 #[tauri::command]
 pub fn get_storyboard_frame(
@@ -517,26 +620,23 @@ pub fn get_storyboard_frame(
     if index >= metadata::video::STORYBOARD_FRAMES {
         return Ok(None);
     }
-    let path = state
-        .data_dir
+    let identity = state.cache_identity()?;
+    let path = protected_cache::workspace_dir(&state.data_dir, &identity.workspace_id)
         .join("storyboards")
         .join(media_id.to_string())
-        .join(format!("{index}.png"));
-    if path.exists() {
-        Ok(Some(path.to_string_lossy().into_owned()))
-    } else {
-        Ok(None)
-    }
+        .join(format!("{index}.hlv"));
+    Ok(protected_cache::read_file(&path, &identity, "storyboard", media_id, index)?
+        .map(|bytes| protected_cache::data_url(&bytes)))
 }
 
 /// Whether a storyboard has already been cached for this video.
 #[tauri::command]
 pub fn has_storyboard(state: tauri::State<'_, AppState>, media_id: i64) -> Result<bool> {
-    Ok(state
-        .data_dir
+    let identity = state.cache_identity()?;
+    Ok(protected_cache::workspace_dir(&state.data_dir, &identity.workspace_id)
         .join("storyboards")
         .join(media_id.to_string())
-        .join("0.png")
+        .join("0.hlv")
         .is_file())
 }
 
@@ -548,7 +648,7 @@ pub async fn generate_storyboard(
     media_id: i64,
 ) -> Result<()> {
     let (path, kind) = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db()?;
         let media = Repository::get_media(&conn, media_id)?
             .ok_or_else(|| AppError::media("This item is no longer in the library."))?;
         (media.path, media.kind)
@@ -557,6 +657,7 @@ pub async fn generate_storyboard(
         return Err(AppError::media("Storyboards are only available for videos."));
     }
     let data_dir = state.data_dir.clone();
+    let identity = state.cache_identity()?;
     let progress_app = app.clone();
     let progress = std::sync::Arc::new(move |done: usize, total: usize| {
         let _ = progress_app.emit(
@@ -573,11 +674,10 @@ pub async fn generate_storyboard(
         let result = metadata::video::probe(
             &PathBuf::from(path),
             media_id,
-            &data_dir,
             true,
             Some(progress),
         );
-        persist_storyboard(&data_dir, media_id, true);
+        persist_storyboard(&data_dir, &identity, media_id, true);
         result
     })
     .await
@@ -600,7 +700,7 @@ pub async fn generate_storyboard(
 #[tauri::command]
 pub fn has_subtitle(state: tauri::State<'_, AppState>, media_id: i64) -> Result<bool> {
     let path = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.unlocked_db()?;
         let media = Repository::get_media(&conn, media_id)?
             .ok_or_else(|| AppError::media("This item is no longer in the library."))?;
         media.path

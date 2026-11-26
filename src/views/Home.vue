@@ -194,7 +194,7 @@ async function playStream(queueOnly = false) {
 
     <div v-if="featured" class="su-panel mb-5 flex flex-wrap items-center gap-4 overflow-hidden p-4">
       <div class="relative h-24 w-38 shrink-0 overflow-hidden rounded-lg bg-elevated">
-        <img v-if="featured.thumbnailPath" :src="library.thumbnailUrl(featured.thumbnailPath)" :alt="featured.title" class="h-full w-full object-cover" />
+        <img v-if="library.coverUrl(featured)" :src="library.coverUrl(featured)" :alt="featured.title" class="h-full w-full object-cover" />
         <div v-else class="flex h-full w-full items-center justify-center bg-linear-to-br from-purple/25 to-blue/25 text-white/30">
           <Clapperboard v-if="featured.kind === 'video'" :size="24" />
           <AppLogo v-else class="h-14 w-14 opacity-80" />

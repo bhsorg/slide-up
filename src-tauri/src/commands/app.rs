@@ -42,6 +42,23 @@ pub fn show_in_folder(path: String) -> Result<()> {
     Ok(())
 }
 
+/// Whether this launch must leave the main window hidden and show only the
+/// desktop widget. The frontend needs this because the main window is created
+/// hidden for the splash reveal on every launch; "currently hidden" alone
+/// cannot distinguish an autostart from a normal launch.
+#[tauri::command]
+pub fn is_widget_only_launch(app: tauri::AppHandle) -> Result<bool> {
+    use tauri::Manager;
+    let state = app.state::<crate::state::AppState>();
+    let widget_enabled = state.settings.lock().unwrap().player_widget;
+    // A workspace chooser needs the main window visible.
+    let multiple_workspaces = crate::workspace::list_workspaces(&state.app_db.lock().unwrap())?.len() > 1;
+    Ok(!state.is_locked()
+        && !multiple_workspaces
+        && crate::started_from_autostart()
+        && widget_enabled)
+}
+
 /// Show the desktop widget after the main window is minimized or hidden.
 #[tauri::command]
 pub fn show_widget_when_main_hidden(app: tauri::AppHandle) -> Result<()> {

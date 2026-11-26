@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { House, Tv, Music2, Clapperboard, ListMusic, Heart, History, ChevronRight } from "@lucide/vue";
+import { House, Tv, Music2, Clapperboard, ListMusic, Heart, History, Users, ChevronRight } from "@lucide/vue";
 import type { ViewId } from "../types/settings";
 
 defineProps<{ active: ViewId }>();
@@ -13,6 +13,7 @@ const navItems: Array<{ id: ViewId; label: string; icon: typeof House }> = [
   { id: "playlists", label: "Playlists", icon: ListMusic },
   { id: "favorites", label: "Favorites", icon: Heart },
   { id: "recent", label: "Recently Played", icon: History },
+  { id: "workspaces", label: "Workspaces", icon: Users },
 ];
 
 const quickAccess: Array<{ id: ViewId; label: string; hint: string; icon: typeof House; color: string }> = [

@@ -222,8 +222,13 @@ async function applyAutoFilters() {
 async function chooseFolder() {
   try {
     const { open } = await import("@tauri-apps/plugin-dialog");
-    const folder = await open({ directory: true, multiple: false });
-    if (typeof folder === "string") await save({ defaultMediaFolder: folder });
+    await api.beginNativeDialog();
+    try {
+      const folder = await open({ directory: true, multiple: false });
+      if (typeof folder === "string") await save({ defaultMediaFolder: folder });
+    } finally {
+      await api.endNativeDialog();
+    }
   } catch (error) {
     toast.error(String(error), "Could not select folder");
   }
@@ -372,11 +377,20 @@ async function resetAll() {
             </div>
             <div class="setting-row">
               <div class="setting-info">
-                <div class="setting-name">Generate thumbnails</div>
-                <div class="setting-hint">Capture cover art and cached seek-preview frames. Turn off for faster scans.</div>
+                <div class="setting-name">Cache audio artwork</div>
+                <div class="setting-hint">Save artwork embedded in music files so album covers stay available offline.</div>
               </div>
               <div class="setting-control">
                 <input type="checkbox" class="toggle" :checked="settings.settings.generateThumbnails" @change="save({ generateThumbnails: ($event.target as HTMLInputElement).checked })" />
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Auto-generate video storyboards</div>
+                <div class="setting-hint">Cache seek-preview frames when videos are added to the library. Off by default — you can still generate a storyboard from a video's context menu.</div>
+              </div>
+              <div class="setting-control">
+                <input type="checkbox" class="toggle" :checked="settings.settings.autoGenerateStoryboard" @change="save({ autoGenerateStoryboard: ($event.target as HTMLInputElement).checked })" />
               </div>
             </div>
             <div class="setting-row">
@@ -923,6 +937,7 @@ async function resetAll() {
 .setting-name { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
 .setting-hint { margin-top: 0.15rem; font-size: 0.7rem; line-height: 1.45; color: var(--text-muted); }
 .setting-control { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; justify-self: end; }
+
 .footnote { margin: 0.2rem 0 0.5rem; font-size: 0.68rem; line-height: 1.4; color: var(--text-muted); }
 .unit { font-size: 0.7rem; color: var(--text-muted); }
 

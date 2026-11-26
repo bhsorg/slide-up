@@ -7,6 +7,7 @@ export interface Playlist {
   updatedAt: number;
   trackCount: number;
   coverPath: string | null;
+  locked: boolean;
 }
 
 export interface PlaylistTrack {

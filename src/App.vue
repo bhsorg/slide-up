@@ -13,6 +13,8 @@ import PlaylistPicker from "./components/PlaylistPicker.vue";
 import MediaProperties from "./components/MediaProperties.vue";
 import ArtistBioModal from "./components/ArtistBioModal.vue";
 import PlaybackDock from "./components/PlaybackDock.vue";
+import WorkspaceLock from "./components/WorkspaceLock.vue";
+import WorkspaceChooser from "./components/WorkspaceChooser.vue";
 import Home from "./views/Home.vue";
 import MusicLibrary from "./views/MusicLibrary.vue";
 import VideoLibrary from "./views/VideoLibrary.vue";
@@ -21,11 +23,13 @@ import Favorites from "./views/Favorites.vue";
 import Recent from "./views/Recent.vue";
 import Settings from "./views/Settings.vue";
 import LiveTv from "./views/LiveTv.vue";
+import Workspaces from "./views/Workspaces.vue";
 import About from "./views/About.vue";
 import { useLibraryStore } from "./stores/library";
 import { usePlayerStore } from "./stores/player";
 import { usePlaylistStore } from "./stores/playlist";
 import { useSettingsStore } from "./stores/settings";
+import { useWorkspaceStore } from "./stores/workspace";
 import { useToast } from "./composables/useToast";
 import { useShortcuts } from "./composables/useShortcuts";
 import { api, onEvent } from "./services/tauri";
@@ -40,6 +44,7 @@ const library = useLibraryStore();
 const player = usePlayerStore();
 const playlists = usePlaylistStore();
 const settings = useSettingsStore();
+const workspace = useWorkspaceStore();
 const toast = useToast();
 const shortcuts = useShortcuts();
 
@@ -201,6 +206,41 @@ async function initializeDragDrop() {
   }
 }
 
+let storesBooted = false;
+async function bootstrapStores() {
+  if (storesBooted) return;
+  storesBooted = true;
+  await Promise.allSettled([library.initialize(), player.initialize(), playlists.initialize()]);
+  unlistenTaskbar = await onEvent<string>("taskbar-action", (action) => {
+    if (action === "play_pause") player.togglePause();
+    else if (action === "previous") player.previous();
+    else if (action === "next") player.next();
+  });
+  await initializeDragDrop();
+}
+
+watch(
+  () => [workspace.active?.id ?? null, workspace.locked, workspace.bootReady] as const,
+  ([id, locked, bootReady], [wasId, wasLocked, wasBootReady]) => {
+    // A workspace switch must never leave the previous workspace's library,
+    // recents, queue or playlists on screen.
+    if (id !== wasId) {
+      library.resetLocal();
+      player.clearLocal();
+      playlists.clearLocal();
+    }
+    if (!bootReady || locked) return;
+    if (id === wasId && wasBootReady && !wasLocked) return;
+    void (async () => {
+      if (storesBooted) {
+        await Promise.allSettled([library.refresh(), player.reload(), playlists.refresh()]);
+      } else {
+        await bootstrapStores();
+      }
+    })();
+  },
+);
+
 onMounted(async () => {
   const splashStartedAt = performance.now();
   const bootSplash = document.getElementById("boot-splash");
@@ -213,24 +253,24 @@ onMounted(async () => {
     window.addEventListener("resize", onWindowResize);
     document.documentElement.dataset.theme = settings.theme;
     settings.initialize();
-    if (settings.settings.startMinimized) {
+    await workspace.initialize().catch(() => undefined);
+    // Rust hides the main window on an autostart with the widget enabled, but
+    // the splash reveal show() here used to undo it and pop the full window up
+    // at Windows sign-in. Ask the backend which launch this is before showing.
+    // A locked workspace always shows the unlock screen, even if "start
+    // minimized" is set, otherwise there would be nothing to unlock.
+    const widgetOnlyLaunch = await api.isWidgetOnlyLaunch().catch(() => false);
+    if (
+      (settings.settings.startMinimized && !workspace.locked && workspace.bootReady) ||
+      widgetOnlyLaunch
+    ) {
       void getCurrentWindow().hide().catch(() => {});
     } else {
       void getCurrentWindow().show().catch(() => {});
     }
     toast.initialize();
     shortcuts.initialize();
-    await Promise.allSettled([
-      library.initialize(),
-      player.initialize(),
-      playlists.initialize(),
-    ]);
-    unlistenTaskbar = await onEvent<string>("taskbar-action", (action) => {
-      if (action === "play_pause") player.togglePause();
-      else if (action === "previous") player.previous();
-      else if (action === "next") player.next();
-    });
-    await initializeDragDrop();
+    if (!workspace.locked) await bootstrapStores();
   } finally {
     // Keep the splash up briefly so it does not flash on very fast starts.
     const remaining = Math.max(0, SPLASH_MS - (performance.now() - splashStartedAt));
@@ -258,11 +298,15 @@ onBeforeUnmount(() => {
   player.dispose();
   playlists.dispose();
   settings.disposeListeners();
+  workspace.disposeListeners();
 });
 </script>
 
 <template>
+  <WorkspaceChooser v-if="workspace.chooserVisible" />
+  <WorkspaceLock v-else-if="!workspace.bootReady || workspace.locked" />
   <div
+    v-if="workspace.bootReady && !workspace.locked"
     class="flex h-screen w-screen flex-col overflow-hidden text-ink"
     :class="view === 'player' && player.isVideo ? 'bg-transparent' : 'bg-base'"
   >
@@ -291,6 +335,7 @@ onBeforeUnmount(() => {
         <Favorites v-else-if="view === 'favorites'" />
         <Recent v-else-if="view === 'recent'" />
         <Settings v-else-if="view === 'settings'" @navigate="navigate" />
+        <Workspaces v-else-if="view === 'workspaces'" />
         <LiveTv v-else-if="view === 'tv'" @open-player="openPlayer" />
         <About v-else-if="view === 'about'" />
       </main>
