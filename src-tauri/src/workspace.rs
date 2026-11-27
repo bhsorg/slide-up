@@ -399,12 +399,13 @@ pub fn set_workspace_password(
         return Err(AppError::native("Use a password of at least 4 characters."));
     }
     let (salt, wrapped) = encrypt_wmk(wmk, password, id)?;
-    // Remove the machine-level wrapped key: while a password is set, DPAPI
-    // must not be able to unlock this workspace.
+    // Neutralise the machine-level wrapped key: while a password is set,
+    // DPAPI must not be able to unlock this workspace. The column is NOT NULL,
+    // so store an empty blob as a sentinel that fails DPAPI unwrap.
     conn.execute(
         "UPDATE workspaces SET password_salt = ?2, password_wrapped_wmk = ?3, \
-         wrapped_wmk = NULL, updated_at = ?4 WHERE id = ?1",
-        params![id, salt, wrapped, now_ms()],
+         wrapped_wmk = ?5, updated_at = ?4 WHERE id = ?1",
+        params![id, salt, wrapped, now_ms(), Vec::<u8>::new()],
     )?;
     Ok(())
 }
